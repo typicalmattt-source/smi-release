@@ -579,7 +579,15 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     return variants.get(key);
   };
   for (const b of scene.brushes ?? []) if (b.door) b.door.name = safeText(b.door.name);
-  const brushBuild = buildBrushParts(scene.brushes ?? [], scale, id => matIndex.get(id) ?? null, variantOf, opts.onBrushFace);
+  // A BSP gives each cubemap-patched copy of a material its own name, so a brush side can name
+  // one the drawn faces don't. Matching on the image finds it, and that image has been reviewed.
+  const byImage = new Map();
+  for (const [id, m] of matIndex) {
+    const base = getMat(baseMatId(id)).base?.toLowerCase();
+    if (base && !id.includes('#') && !byImage.has(base)) byImage.set(base, m);
+  }
+  const brushMaterial = id => matIndex.get(id) ?? byImage.get(getMat(id).base?.toLowerCase()) ?? null;
+  const brushBuild = buildBrushParts(scene.brushes ?? [], scale, brushMaterial, variantOf, opts.onBrushFace);
   const clipParts = mergeBoxes(classifyBrushes(scene.solids.filter(s => s.toolOnly), scale).parts);
 
   // Batch into GLB files small enough for Open Cloud.

@@ -311,9 +311,15 @@ local function buildBrushes(brushes, materials, images, parentOf, work, onStep)
 			part.Material = Enum.Material[m.material] or Enum.Material.SmoothPlastic
 		end
 		if part then
-			part.Name = "Brush"
-			part.CanCollide = not b.nc
+			part.Name = b.pl and "BrushFace" or "Brush"
+			part.CanCollide = not (b.nc or b.pl)
 			part.CanTouch = false
+			-- A plate is only a surface, so rays and shadows belong to the solid underneath.
+			if b.pl then
+				part.CanQuery = false
+				part.CastShadow = false
+			end
+			if b.tr then part.Transparency = 1 end
 			dressBrush(part, b, materials, images)
 			part.Parent = parentOf(b)
 		end
