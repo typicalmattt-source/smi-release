@@ -4,6 +4,7 @@ import { CONTENTS, SURF, pointLeaf, modelBrushes } from './bsp.js';
 import { loadMaterial, describeMaterial, normMat } from './vmt.js';
 import { sub, add, mul, dot, cross, unit, len, vec3, angleMatrix, applyM } from './math.js';
 import { brushPolys } from './collision.js';
+import { clipOverlay } from './overlay.js';
 
 const SKIP_CLASSES = /^(trigger_|func_areaportal|func_occluder|func_viscluster|func_clip|func_precipitation|func_dustmotes|func_dustcloud|func_smokevolume|func_buyzone|func_bomb_target|func_hostage_rescue|func_ladder|func_nav_|func_playerinfected|func_lod$|func_vehicleclip|func_vehicle_clip)/;
 const MOVE_ANGLES = /^(func_door$|func_movelinear|func_button|momentary_door|func_water_analog)/;
@@ -416,9 +417,12 @@ export function buildScene(map, vfs, opts = {}) {
     if (o.pts[3][2] === 1) basisV = mul(basisV, -1);
     const pts = o.pts.map(p => add(add(o.origin, mul(basisU, p[0])), mul(basisV, p[1])));
     const [U0, U1, V0, V1] = o.uv;
+    const uv = [[U0, V0], [U0, V1], [U1, V1], [U1, V0]];
+    const faces = o.faces.map(i => map.faces[i]).filter(Boolean);
+    const flat = faces.length > 0 && faces.every(f => f.dispinfo < 0);
     scene.overlays.push({
-      material: normMat(td.name), pts, normal: basisN,
-      uv: [[U0, V0], [U0, V1], [U1, V1], [U1, V0]],
+      material: normMat(td.name), pts, normal: basisN, uv,
+      pieces: flat ? clipOverlay(pts, uv, basisN, faces.map(f => ({ pts: facePolygon(map, f), n: faceNormal(map, f) }))) : null,
     });
   }
   return scene;

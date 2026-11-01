@@ -355,10 +355,14 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     const OFFSET = 0.3;
     (scene.overlays ?? []).forEach((o, i) => {
       if (isRemoved(o.material)) { removed.overlays++; return; }
-      const off = mul(o.normal, OFFSET + (i % 8) * 0.02);
-      const pts = o.pts.map(p => add(p, off));
+      const lift = OFFSET + (i % 8) * 0.02;
       const list = scene.polys.get(o.material) ?? scene.polys.set(o.material, []).get(o.material);
-      list.push({ pts, nrm: pts.map(() => o.normal), uv: o.uv, faceN: o.normal, overlay: true });
+      // Overlays on displacements have no pieces yet, so those stay whole quads.
+      const pieces = o.pieces ?? [{ pts: o.pts, uv: o.uv, n: o.normal }];
+      for (const piece of pieces) {
+        const pts = piece.pts.map(p => add(p, mul(piece.n, lift)));
+        list.push({ pts, nrm: pts.map(() => piece.n), uv: piece.uv, faceN: piece.n, overlay: true });
+      }
     });
     if (!scene.decals?.length) return;
     // infodecals are projected at runtime in Source, so find the surface they hit.
@@ -422,7 +426,8 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
       for (const v of p.pts) { cx += v[0]; cy += v[1]; cz += v[2]; }
       const n = p.pts.length;
       // Displacement triangles and flat faces are kept apart: they collide differently.
-      const k = `${Math.floor(cx / n / CELL)},${Math.floor(cy / n / CELL)},${Math.floor(cz / n / CELL)},${p.disp ? 1 : 0}`;
+      // Overlays get their own mesh, because Parts mode drops the flat world meshes.
+      const k = `${Math.floor(cx / n / CELL)},${Math.floor(cy / n / CELL)},${Math.floor(cz / n / CELL)},${p.overlay ? 1 : 0},${p.disp ? 1 : 0}`;
       (cells.get(k) ?? cells.set(k, []).get(k)).push(p);
     }
     for (const [k, list] of cells) {

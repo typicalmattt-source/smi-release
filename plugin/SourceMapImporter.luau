@@ -260,10 +260,14 @@ end
 -- Cuts a bounding Part along each brush plane. Each cutter's colour lands on the face it makes.
 local function cutBrush(b, materials, work)
 	local body = materials[b.m + 1]
+	-- Cut at the world origin and move the result: measured sizes come out exact there, while
+	-- 1000 studs out they were up to 0.02 off.
+	local place = brushCf(b.cf)
 	local base = Instance.new("Part")
 	base.Anchored = true
-	base.CFrame = brushCf(b.cf)
-	base.Size = Vector3.new(b.s[1], b.s[2], b.s[3]) + Vector3.one * 0.2
+	base.CFrame = place.Rotation
+	-- A plate already has its final thickness, so only a solid starts oversized.
+	base.Size = Vector3.new(b.s[1], b.s[2], b.s[3]) + Vector3.one * (b.pl and 0 or 0.2)
 	base.Color = brushColor(body)
 	base.Material = Enum.Material[body.material] or Enum.Material.SmoothPlastic
 	base.Parent = work
@@ -276,7 +280,7 @@ local function cutBrush(b, materials, work)
 		cut.Anchored = true
 		cut.Size = Vector3.one * reach
 		-- Start from the brush's centre: a cutter centred anywhere else on the plane can miss it.
-		local onPlane = base.Position + n * (c[4] - base.Position:Dot(n))
+		local onPlane = n * (c[4] - place.Position:Dot(n))
 		cut.CFrame = CFrame.lookAlong(onPlane + n * (reach / 2), n)
 		cut.Color = brushColor(m)
 		cut.Material = Enum.Material[m.material] or Enum.Material.SmoothPlastic
@@ -288,9 +292,11 @@ local function cutBrush(b, materials, work)
 	end)
 	for _, cut in cutters do cut:Destroy() end
 	base:Destroy()
-	if not ok then return nil end
+	-- SubtractAsync returns nil, with no error, when the cuts leave nothing.
+	if not ok or not union then return nil end
 	union.UsePartColor = false
 	union.Anchored = true
+	union.CFrame += place.Position
 	return union
 end
 

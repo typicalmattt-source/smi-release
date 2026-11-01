@@ -28,7 +28,11 @@ function polyArea(pts) {
 /** Every right-handed way of laying a Part's axes along these three. */
 function framesFrom(axes) {
   const out = [];
-  const signed = axes.flatMap(a => [a, mul(a, -1)]);
+  // A brush counts as a box with its corners slightly off square, but a Part's axes must be exact.
+  // Near the edge of a large map, even a 0.1 degree error moves the Part by a visible amount.
+  const a = unit(axes[0]);
+  const b = unit(sub(axes[1], mul(a, dot(axes[1], a))));
+  const signed = [a, b, cross(a, b)].flatMap(v => [v, mul(v, -1)]);
   for (const x of signed) {
     for (const y of signed) {
       if (Math.abs(dot(x, y)) > 1e-6) continue;
@@ -126,6 +130,61 @@ function bestLayout(faces, frames, pts) {
   return best;
 }
 
+// A union paints each surface with the Texture of the box side it faces most (measured in Studio,
+// right up to 44 degrees). So a slanted brush's union can show its own faces, one per side, and
+// each one saves a plate. A face that doesn't fit gets a plate, which just covers whatever the
+// union painted there. The margin keeps a face off the tie between two sides.
+const SIDE_MARGIN = 0.15, FIT_TILES = 0.01;
+
+const offBy = d => { const t = Math.abs(d) % 1; return Math.min(t, 1 - t); };
+
+/** True when a Texture shows this face's image correctly at all its corners. */
+function fitsFace(m, f) {
+  return f.pts.every(p => {
+    const a = dot(sub(p, m.corner), m.R), b = dot(sub(p, m.corner), m.D);
+    const [u, v] = XFORMS[m.xf]((a + m.ou) / m.su, (b + m.ov) / m.sv);
+    return offBy(u - dot(p, f.gu) - f.ou) < FIT_TILES && offBy(v - dot(p, f.gv) - f.ov) < FIT_TILES;
+  });
+}
+
+/** The box that lets a slanted brush's union show the most faces itself, or null if it can't. */
+function bodyLayout(faces, pts) {
+  const drawn = faces.filter(f => f.mat !== null);
+  if (!drawn.length || drawn.some(f => f.clear)) return null;
+  const axes = [[[1, 0, 0], [0, 1, 0], [0, 0, 1]]];
+  // Lining the box up with a face's texture is what makes that texture fit a side exactly.
+  for (const f of drawn) {
+    const along = sub(f.gu, mul(f.n, dot(f.gu, f.n)));
+    if (len(along) > 1e-9) axes.push([f.n, along, cross(f.n, along)]);
+  }
+  for (const a of faces) {
+    for (const b of faces) {
+      if (a !== b && Math.abs(dot(a.n, b.n)) < 0.9) axes.push([a.n, b.n, cross(a.n, b.n)]);
+    }
+  }
+  let best = null;
+  for (const set of axes) {
+    for (const frame of framesFrom(set)) {
+      const shape = fit(frame, pts);
+      const mapped = new Map();
+      for (const f of drawn) {
+        const lean = FACES.map(s => dot(f.n, worldOf(frame, s.n))).sort((x, y) => y - x);
+        if (lean[0] - lean[1] < SIDE_MARGIN) continue;
+        const m = mapFace(f, frame, shape);
+        if (!m || m.kind === 'skew' || !fitsFace(m, f)) continue;
+        const held = mapped.get(m.face);
+        if (!held || f.area > held.area) mapped.set(m.face, { ...m, area: f.area, mat: f.mat, src: f });
+      }
+      if (!mapped.size) continue;
+      // Every face held is one object fewer, so that outweighs how neat the images are.
+      let score = mapped.size * 1e9 + frame[1][1] * 1e-3;
+      for (const v of mapped.values()) score += WEIGHT[v.kind] * v.area;
+      if (!best || score > best.score) best = { frame, shape, mapped, score };
+    }
+  }
+  return best;
+}
+
 const PLATE_THICK = 0.02, PLATE_LIFT = 0.004, PLATE_PAD = 0.004;
 const r5 = v => Math.round(v * 100000) / 100000;
 const cframe = (centre, f) => [
@@ -134,21 +193,25 @@ const cframe = (centre, f) => [
 ];
 
 /**
- * A union gets one Texture per box side, so a chamfer or any other slanted face can't have its
- * own. Instead each face of a slanted brush gets a thin plate lying on it, turned so the Part's
- * axes run along the face's texture axes. That maps exactly, at any angle. Plates only show the
- * texture: the union underneath stays the solid shape.
+ * A union gets one Texture per box side, so a face that can't have a side to itself gets a thin
+ * plate lying on it instead, turned so the Part's axes run along the face's texture axes. That
+ * maps exactly, at any angle. Plates only show the texture: the union stays the solid shape.
  */
 function plateFor(face, variantOf, onFace) {
   const n = face.n;
   const flat = g => sub(g, mul(n, dot(g, n)));
   const fu = flat(face.gu), fv = flat(face.gv);
   const lu = len(fu), lv = len(fv);
-  if (lu < 1e-9 || lv < 1e-9) return null;
+  // A texture axis pointing into the face leaves only rounding noise here, not a direction.
+  if (lu < 1e-6 * len(face.gu) || lv < 1e-6 * len(face.gv)) return null;
   const U = mul(fu, 1 / lu);
-  let V = mul(fv, 1 / lv);
-  const skew = Math.abs(dot(U, V)) > EPS;
-  if (skew) V = unit(sub(V, mul(U, dot(U, V))));
+  const rawV = mul(fv, 1 / lv);
+  const skew = Math.abs(dot(U, rawV)) > EPS;
+  // Always exactly square: the plate's position below is built along these axes, so a small error
+  // here lands it several studs away on a map far from the origin. Crossing with the normal also
+  // holds up on a face where the texture's two axes are almost parallel.
+  const across = cross(n, U);
+  const V = dot(across, rawV) >= 0 ? across : mul(across, -1);
   // Seen from outside, an unflipped image has U x V pointing inward.
   const mirrored = dot(cross(U, V), n) > 0;
   const frame = [mirrored ? mul(U, -1) : U, mul(V, -1), n];
@@ -182,7 +245,7 @@ function plateFor(face, variantOf, onFace) {
     t: 'b', pl: 1, cf: cframe(centre, frame), s: [r3(w), r3(h), PLATE_THICK], m: face.mat,
     f: [[2, baked ?? face.mat, r3(su), r3(sv), r3(ou), r3(ov)]],
   };
-  // Anything but a rectangle is trimmed along its own edges, then flat on both sides.
+  // Anything but a rectangle is trimmed along its own edges. The Part is already the right thickness.
   if (!rectangle) {
     const c = face.pts.reduce((s, p) => add(s, p), [0, 0, 0]).map(v => v / face.pts.length);
     const cuts = [];
@@ -193,8 +256,6 @@ function plateFor(face, variantOf, onFace) {
       if (dot(c, e) > dot(a, e)) e = mul(e, -1);
       cuts.push([...e.map(r5), r3(dot(a, e) + PLATE_PAD), face.mat]);
     });
-    const outer = face.d + PLATE_LIFT;
-    cuts.push([...n.map(r5), r5(outer), face.mat], [...mul(n, -1).map(r5), r5(-(outer - PLATE_THICK)), face.mat]);
     entry.t = 'c';
     entry.c = cuts;
   }
@@ -224,7 +285,12 @@ export const XFORMS = {
 export function buildBrushParts(brushes, scale, matOf, variantOf = () => null, onFace = null) {
   const out = [];
   const areas = { exact: 0, flip: 0, skew: 0, swap: 0 };
-  let boxes = 0, cuts = 0, unbaked = 0, plates = 0, trimmed = 0;
+  let boxes = 0, cuts = 0, merged = 0, unbaked = 0, plates = 0, trimmed = 0;
+  const textureOf = v => {
+    const variant = v.xf ? variantOf(v.mat, v.xf) : null;
+    if (variant === null && v.xf) unbaked++;
+    return [v.face, variant ?? v.mat, r3(v.su), r3(v.sv), r3(v.ou), r3(v.ov)];
+  };
   for (const brush of brushes) {
     const polys = brushPolys(brush.faces);
     if (polys.length < 4) continue;
@@ -261,11 +327,7 @@ export function buildBrushParts(brushes, scale, matOf, variantOf = () => null, o
       const { frame, shape, mapped } = bestLayout(faces, framesFrom(box.map(toRbx)), pts);
       const entry = {
         t: 'b', cf: cframe(shape.centre, frame), s: shape.size.map(v => r3(Math.max(v, 0.05))), m: body,
-        f: [...mapped.values()].map(v => {
-          const variant = v.xf ? variantOf(v.mat, v.xf) : null;
-          if (variant === null && v.xf) unbaked++;
-          return [v.face, variant ?? v.mat, r3(v.su), r3(v.sv), r3(v.ou), r3(v.ov)];
-        }),
+        f: [...mapped.values()].map(textureOf),
       };
       for (const v of mapped.values()) {
         areas[v.kind] += v.area;
@@ -278,20 +340,28 @@ export function buildBrushParts(brushes, scale, matOf, variantOf = () => null, o
       continue;
     }
 
-    // The solid shape, with nothing on it. Its faces are drawn by the plates.
-    const frame = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    const shape = fit(frame, pts);
+    // The solid shape. It shows the faces it can hold, and plates draw the rest.
+    const layout = bodyLayout(faces, pts);
+    const frame = layout?.frame ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const shape = layout?.shape ?? fit(frame, pts);
+    const held = [...(layout?.mapped.values() ?? [])];
     const entry = {
-      t: 'c', cf: cframe(shape.centre, frame), s: shape.size.map(v => r3(Math.max(v, 0.05))), m: body, f: [],
+      t: 'c', cf: cframe(shape.centre, frame), s: shape.size.map(v => r3(Math.max(v, 0.05))), m: body,
+      f: held.map(textureOf),
       c: faces.map(f => [...f.n.map(r5), r3(f.d), f.mat ?? -1]),
     };
+    for (const v of held) {
+      areas[v.kind] += v.area;
+      onFace?.(v);
+    }
+    if (held.length === faces.filter(f => f.mat !== null).length) merged++;
     if (faces.every(f => f.mat === null || f.clear)) entry.tr = 1;
     if (brush.noCollide) entry.nc = 1;
     door(entry);
     out.push(entry);
     cuts++;
     for (const f of faces) {
-      if (f.mat === null) continue;
+      if (f.mat === null || held.some(v => v.src === f)) continue;
       const p = plateFor(f, variantOf, onFace);
       if (!p) continue;
       areas[p.mapped.kind] += f.area;
@@ -302,5 +372,5 @@ export function buildBrushParts(brushes, scale, matOf, variantOf = () => null, o
       out.push(p.entry);
     }
   }
-  return { brushes: out, stats: { boxes, cuts, plates, trimmed, unbaked, areas: Object.fromEntries(Object.entries(areas).map(([k, v]) => [k, Math.round(v)])) } };
+  return { brushes: out, stats: { boxes, cuts, merged, plates, trimmed, unbaked, areas: Object.fromEntries(Object.entries(areas).map(([k, v]) => [k, Math.round(v)])) } };
 }

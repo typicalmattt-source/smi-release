@@ -5,6 +5,7 @@ import { materialCache, emitDisplacement, noteEntity } from './scene.js';
 import { normMat } from './vmt.js';
 import { vtfInfo } from './vtf.js';
 import { brushPolys } from './collision.js';
+import { clipOverlay } from './overlay.js';
 import { sub, add, mul, dot, cross, unit, len, vec3 } from './math.js';
 
 /** KeyValues keeping repeats: each node is {k:{key:[values]}, c:[{name,node}]}. */
@@ -95,6 +96,8 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
   };
 
   const disps = [];
+  // Each brush side's polygon by Hammer id, so overlays can find what they're attached to.
+  const sideFaces = new Map();
   let doorCount = 0;
   const addSolid = (solid, opts2 = {}) => {
     const sides = solid.c.filter(c => c.name === 'side').map(c => c.node);
@@ -120,7 +123,9 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
     let hasDisp = false;
     for (const poly of polys) {
       const s = planes[poly.plane].side;
-      if (s.c.some(x => x.name === 'dispinfo')) hasDisp = true;
+      const disp = s.c.some(x => x.name === 'dispinfo');
+      if (disp) hasDisp = true;
+      sideFaces.set(key(s, 'id'), { pts: poly.pts, n: poly.n, disp });
     }
     for (const poly of polys) {
       const s = planes[poly.plane].side;
@@ -227,8 +232,16 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
         material: normMat(key(e, 'material')), normal: n,
         pts: uvp.map(p => add(add(org, mul(basisU, p[0])), mul(basisV, p[1]))),
         uv: [[su, sv], [su, ev], [eu, ev], [eu, sv]],
+        sides: (key(e, 'sides') ?? '').trim().split(/\s+/).filter(Boolean),
       });
     }
+  }
+
+  // After the loop: an overlay can come before the brush entity it sits on.
+  for (const o of scene.overlays) {
+    const faces = o.sides.map(id => sideFaces.get(id)).filter(Boolean);
+    const flat = faces.length > 0 && faces.every(f => !f.disp);
+    o.pieces = flat ? clipOverlay(o.pts, o.uv, o.normal, faces) : null;
   }
 
   // Same treatment as the BSP path: welded smooth normals across displacements.
