@@ -1,0 +1,17 @@
+# Built app
+dist/
+node_modules/
+
+# Saved work: map content, uploaded asset IDs and review decisions
+projects/
+
+# Anything that could hold a key or a personal path
+*.key
+apikey*
+.env*
+*.lnk
+
+# Logs and OS clutter
+*.log
+Thumbs.db
+desktop.ini

@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Source Map Importer</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f25;--panel2:#252932;--line:#343a46;--text:#e6e8ec;--dim:#9aa2b1;--accent:#e8912d;--good:#4caf7d;--bad:#e5534b;--warn:#d9a441}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 "Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column}
+button,input,select{font:inherit;color:inherit}
+header{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0;font-weight:600;white-space:nowrap}
+.steps{display:flex;gap:4px;flex:1;min-width:0}
+.step{background:none;border:0;padding:6px 12px;border-radius:6px;color:var(--dim);cursor:pointer;white-space:nowrap}
+.step.on{background:var(--panel2);color:var(--text)}
+.step:disabled{opacity:.4;cursor:default}
+.step b{color:var(--accent);margin-right:5px}
+main{flex:1;overflow:auto;padding:18px;min-height:0}
+.view{display:none;max-width:1500px;margin:0 auto}.view.on{display:block}
+.narrow{max-width:760px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.card h2{margin:0 0 4px;font-size:15px}
+.hint{color:var(--dim);font-size:13px;margin:0 0 12px}
+label.f{display:block;margin:12px 0 4px;color:var(--dim);font-size:13px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input[type=text],input[type=password],select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 10px;width:100%;min-width:0}
+.row input[type=text],.row input[type=password]{flex:1;width:auto}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 13px;cursor:pointer;white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn.main{background:var(--accent);border-color:var(--accent);color:#1b1205;font-weight:600}
+.btn:disabled{opacity:.45;cursor:default}
+.check{display:flex;gap:8px;align-items:center;margin:5px 0;cursor:pointer}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.tab{border:1px solid var(--line);background:var(--panel);padding:5px 11px;border-radius:999px;cursor:pointer;color:var(--dim);font-size:13px}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#1b1205;font-weight:600}
+.bar{position:sticky;top:-18px;background:var(--bg);padding:10px 0;z-index:5;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.bar input{max-width:240px}
+.spacer{flex:1}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(172px,1fr));gap:10px}
+.a{background:var(--panel);border:2px solid var(--line);border-radius:9px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;position:relative}
+.a.sel{border-color:var(--accent)}
+.a.high{border-color:var(--bad)}.a.high.sel{border-color:var(--accent)}
+.a.d-keep{border-color:var(--good)}.a.d-remove,.a.d-color,.a.d-replace{border-color:#555f70}
+.a .pic{aspect-ratio:1;background:repeating-conic-gradient(#2a2d33 0 25%,#212328 0 50%) 0 0/16px 16px;display:flex;align-items:center;justify-content:center}
+.a img{width:100%;height:100%;object-fit:contain;image-rendering:auto}
+.a.d-remove img{opacity:.22;filter:grayscale(1)}
+.a .none{color:var(--dim);font-size:12px}
+.a .tag{position:absolute;top:6px;left:6px;background:#000b;padding:1px 7px;border-radius:4px;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+.a .st{position:absolute;top:6px;right:6px;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;background:var(--panel2)}
+.st.keep{background:var(--good);color:#06180e}.st.remove{background:var(--bad);color:#fff}.st.color,.st.replace{background:var(--warn);color:#201500}
+.a .info{padding:7px 9px;font-size:12px;min-width:0}
+.a .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.a .use{color:var(--dim)}
+.fl{display:block;font-size:11px;margin-top:3px;color:var(--warn);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl.high{color:#ff8a83}
+.modal{position:fixed;inset:0;background:#000c;display:none;align-items:center;justify-content:center;z-index:20;padding:20px}
+.modal.on{display:flex}
+.mbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:1040px;width:100%;max-height:100%;overflow:auto;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}
+.mpic{background:repeating-conic-gradient(#2a2d33 0 25%,#212328 0 50%) 0 0/20px 20px;display:flex;align-items:center;justify-content:center;min-height:420px}
+.mpic img{max-width:100%;max-height:78vh;object-fit:contain}
+.mside{padding:18px;min-width:0}
+.mside h3{margin:0 0 6px;font-size:14px;word-break:break-all}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+.ocr{background:var(--bg);border-radius:6px;padding:8px;font-size:12px;word-break:break-word;margin-top:8px}
+.prog{height:8px;background:var(--panel2);border-radius:5px;overflow:hidden;margin-top:8px}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.stat{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:10px}
+.stat div{background:var(--bg);border-radius:7px;padding:9px 11px}
+.stat b{display:block;font-size:18px}
+.stat span{color:var(--dim);font-size:12px}
+.err{color:#ff8a83;margin-top:8px;white-space:pre-wrap}
+.ok{color:var(--good);margin-top:8px}
+.warn{color:var(--warn);margin-top:8px}
+ul.plain{margin:6px 0 0;padding-left:18px;color:var(--dim);font-size:13px}
+#job{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;width:310px;display:none;z-index:30}
+@media(max-width:760px){.mbox{grid-template-columns:1fr}header{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Source Map Importer</h1>
+  <nav class="steps">
+    <button class="step on" data-v="load"><b>1</b>Load map</button>
+    <button class="step" data-v="review" disabled><b>2</b>Review assets</button>
+    <button class="step" data-v="build" disabled><b>3</b>Build</button>
+    <button class="step" data-v="upload" disabled><b>4</b>Upload</button>
+  </nav>
+  <button class="btn main" id="updateBtn" style="display:none;margin-left:auto"></button>
+</header>
+<main>
+  <section class="view on" id="v-load"><div class="narrow">
+    <div class="card">
+      <h2>Map</h2>
+      <p class="hint">Browse for a map, or drop one anywhere on this window. A compiled .bsp, or a workshop .gma with a map inside, gives the best result. A .vmf works too, but has no embedded content and no 3D-skybox detection. Keep its custom content in a folder with the same name next to it.</p>
+      <div class="row"><input type="text" id="mapPath" placeholder="C:\path\to\map.bsp"><button class="btn" id="browseMap">Browse…</button></div>
+      <label class="f">Extra content and replacer mods (.gma, .vpk or folders), highest priority first</label>
+      <p class="hint">Anything here overrides the base games and files packed in the map. A folder can hold loose content or a pile of .vpk files.</p>
+      <div id="contentList"></div>
+      <p class="hint" id="modHits"></p>
+      <div class="row" style="margin-top:6px"><button class="btn" id="addFile">Add file…</button><button class="btn" id="addDir">Add folder…</button></div>
+    </div>
+    <div class="card">
+      <h2>Base games</h2>
+      <p class="hint">Where stock textures and models come from. The map's own game is mounted automatically when the map is inside a game's maps folder.</p>
+      <div id="gameList"></div>
+    </div>
+    <div class="card">
+      <h2>Options</h2>
+      <label class="check"><input type="checkbox" id="optOcr" checked> Read text inside textures to catch links and signs (Windows OCR)</label>
+      <label class="check"><input type="checkbox" id="optWater" checked> Replace water with Roblox terrain water</label>
+      <div class="row" style="margin-top:12px"><button class="btn main" id="scanBtn">Scan map</button></div>
+      <div class="err" id="loadErr"></div>
+    </div>
+  </div></section>
+
+  <section class="view" id="v-review">
+    <div class="bar">
+      <div class="chips" id="tabs"></div>
+      <input type="text" id="search" placeholder="Search names…">
+      <span class="spacer"></span>
+      <span id="selInfo" class="hint" style="margin:0"></span>
+      <button class="btn" data-bulk="keep">Keep</button>
+      <button class="btn" data-bulk="remove">Remove</button>
+      <button class="btn" data-bulk="color">Blank it</button>
+      <button class="btn" data-bulk="clear">Undo</button>
+    </div>
+    <p class="hint" id="reviewHint"></p>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <section class="view" id="v-build"><div class="narrow">
+    <div class="card">
+      <h2>Build</h2>
+      <p class="hint">Turns the reviewed map into small geometry files and separate textures. Nothing leaves this PC at this step.</p>
+      <label class="f">Texture limit</label>
+      <select id="optTex"><option value="1024">1024 (Roblox maximum)</option><option value="512">512 (faster to load)</option><option value="256">256 (smallest)</option></select>
+      <label class="check" style="margin-top:12px"><input type="checkbox" id="optNormals" checked> Include normal maps</label>
+      <label class="check"><input type="checkbox" id="optSky" checked> Include skybox</label>
+      <label class="check"><input type="checkbox" id="optParts"> Prepare brushes as Parts (adds flipped and rotated copies of some textures)</label>
+      <label class="check" id="ackWrap" style="display:none"><input type="checkbox" id="ackOcr"> I understand the text scan didn't finish, and I've checked for links myself</label>
+      <div class="row" style="margin-top:12px"><button class="btn main" id="buildBtn">Build map</button></div>
+      <div class="err" id="buildErr"></div>
+      <ul class="plain" id="blockers"></ul>
+      <div id="buildStats"></div>
+    </div>
+  </div></section>
+
+  <section class="view" id="v-upload"><div class="narrow">
+    <div class="card">
+      <h2>Upload to Roblox</h2>
+      <p class="hint">Uploads every kept texture and geometry file to this account with Open Cloud. Only assets that passed review are in the build. Re-running resumes: anything already uploaded is skipped.</p>
+      <label class="f">Open Cloud API key (needs Assets read and write). Kept in memory for this upload only.</label>
+      <input type="password" id="apiKey" autocomplete="off">
+      <label class="f">…or path to a text file holding the key</label>
+      <input type="text" id="keyFile" placeholder="C:\path\to\apikey.txt">
+      <label class="f">Upload to</label>
+      <div class="row"><select id="creatorType" style="width:130px"><option value="user">User ID</option><option value="group">Group ID</option></select><input type="text" id="creatorId" placeholder="123456"></div>
+      <div class="row" style="margin-top:12px"><button class="btn main" id="uploadBtn">Upload</button></div>
+      <div class="err" id="uploadErr"></div>
+      <div id="uploadResult"></div>
+    </div>
+    <div class="card">
+      <h2>Then, in Roblox Studio</h2>
+      <p class="hint" style="margin:0">Open the Source Map Importer plugin and press Build in Workspace. Keep this app running: the plugin reads the build from it.</p>
+    </div>
+  </div></section>
+</main>
+
+<div class="modal" id="modal"><div class="mbox">
+  <div class="mpic"><img id="mImg" alt=""></div>
+  <div class="mside">
+    <h3 id="mName"></h3>
+    <div class="hint" id="mUse"></div>
+    <div id="mFlags"></div>
+    <div class="acts">
+      <button class="btn" data-act="keep" title="K">Keep (K)</button>
+      <button class="btn" data-act="remove" title="R">Remove (R)</button>
+      <button class="btn" data-act="color" title="B">Blank it (B)</button>
+      <button class="btn" id="mReplace">Replace with PNG…</button>
+    </div>
+    <div class="row"><button class="btn" id="mPrev">← Previous</button><button class="btn" id="mNext">Next →</button><span class="spacer"></span><button class="btn" id="mClose">Close</button></div>
+    <p class="hint" id="mHelp" style="margin-top:12px"></p>
+  </div>
+</div></div>
+<input type="file" id="pngInput" accept="image/png" hidden>
+
+<div id="job"><div id="jobLabel"></div><div class="prog"><i id="jobBar"></i></div></div>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const api = async (p, body) => {
+  const r = await fetch(p, body === undefined ? {} : { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtB = n => n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB';
+
+let assets = [], decisions = {}, status = null, tab = 'review', sel = new Set(), modalIdx = -1, visible = [];
+let games = [], content = [], seenJob = null, booted = false, gamesDrawn = false;
+
+const isHigh = a => a.flags.some(f => f.sev === 'high');
+const go = v => {
+  $$('.step').forEach(s => s.classList.toggle('on', s.dataset.v === v));
+  $$('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
+};
+$$('.step').forEach(s => s.onclick = () => go(s.dataset.v));
+
+// ---- load ----
+const drawContent = () => {
+  $('#contentList').innerHTML = content.map((c, i) => `<div class="row" style="margin-bottom:5px"><input type="text" value="${esc(c)}" readonly><button class="btn" data-rm="${i}">Remove</button></div>`).join('');
+  $$('[data-rm]').forEach(b => b.onclick = () => { content.splice(+b.dataset.rm, 1); drawContent(); });
+};
+const desktop = window.smi;
+const pick = kind => (desktop ? desktop.pick(kind) : Promise.resolve(''));
+$('#browseMap').onclick = async () => { const p = await pick('map'); if (p) $('#mapPath').value = p; };
+$('#addFile').onclick = async () => { const p = await pick('content'); if (p) { content.push(p); drawContent(); } };
+$('#addDir').onclick = async () => { const p = await pick('folder'); if (p) { content.push(p); drawContent(); } };
+
+// A quiet check at startup. It only appears when there's something newer.
+api('/api/update').then(u => {
+  if (!u.available || !desktop?.openReleases) return;
+  const b = $('#updateBtn');
+  b.textContent = `Update available: ${u.latest}`;
+  b.title = `You have ${u.current}`;
+  b.onclick = () => desktop.openReleases();
+  b.style.display = '';
+}).catch(() => {});
+
+// Drop a map anywhere on the window. Content files join the list instead.
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  if (!desktop) return;
+  for (const f of e.dataTransfer.files) {
+    const p = desktop.pathOf(f);
+    if (/\.(bsp|vmf)$/i.test(p) || (/\.gma$/i.test(p) && !$('#mapPath').value)) $('#mapPath').value = p;
+    else if (p) content.push(p);
+  }
+  drawContent();
+  go('load');
+});
+
+$('#scanBtn').onclick = async () => {
+  $('#loadErr').textContent = '';
+  try {
+    const dirs = $$('#gameList input:checked').flatMap(c => JSON.parse(c.value));
+    await api('/api/scan', { map: $('#mapPath').value.trim().replace(/^"|"$/g, ''), content, games: dirs, ocr: $('#optOcr').checked, terrainWater: $('#optWater').checked });
+    tick();
+  } catch (e) { $('#loadErr').textContent = e.message; }
+};
+
+// ---- review ----
+const passes = (a, q) => {
+  if (q && !a.name.toLowerCase().includes(q)) return false;
+  switch (tab) {
+    case 'review': return isHigh(a) && !decisions[a.id];
+    case 'flagged': return a.flags.length > 0;
+    case 'all': return true;
+    case 'done': return !!decisions[a.id];
+    default: return a.kind === tab;
+  }
+};
+const drawTabs = () => {
+  const c = f => assets.filter(f).length;
+  const tabs = [['review', 'Needs decision', c(a => isHigh(a) && !decisions[a.id])], ['flagged', 'All flagged', c(a => a.flags.length)], ['all', 'Everything', assets.length], ['material', 'Textures', c(a => a.kind === 'material')], ['decal', 'Decals', c(a => a.kind === 'decal')], ['model', 'Models', c(a => a.kind === 'model')], ['sky', 'Sky', c(a => a.kind === 'sky')], ['done', 'Decided', c(a => decisions[a.id])]];
+  $('#tabs').innerHTML = tabs.map(([k, l, n]) => `<button class="tab ${k === tab ? 'on' : ''}" data-t="${k}">${l} ${n}</button>`).join('');
+  $$('[data-t]').forEach(b => b.onclick = () => { tab = b.dataset.t; sel.clear(); draw(); });
+};
+const useText = a => {
+  const u = a.uses, b = [];
+  if (u.instances) b.push(`${u.instances} placed`);
+  if (u.faces) b.push(`${u.faces} faces`);
+  if (u.overlays) b.push(`${u.overlays} overlays`);
+  if (u.decals) b.push(`${u.decals} decals`);
+  if (u.models) b.push(`${u.models} models`);
+  return b.join(', ');
+};
+const LABEL = { keep: 'KEEP', remove: 'REMOVE', color: 'BLANK', replace: 'REPLACED' };
+const draw = () => {
+  drawTabs();
+  const q = $('#search').value.trim().toLowerCase();
+  visible = assets.filter(a => passes(a, q));
+  $('#grid').innerHTML = visible.map((a, i) => {
+    const d = decisions[a.id];
+    const cls = ['a', isHigh(a) && !d ? 'high' : '', d ? 'd-' + d.action : '', sel.has(a.id) ? 'sel' : ''].join(' ');
+    const top = a.flags.slice(0, 2).map(f => `<span class="fl ${f.sev}" title="${esc(f.why)}">${esc(f.why)}</span>`).join('');
+    return `<div class="${cls}" data-i="${i}"><div class="pic">${a.thumb ? `<img loading="lazy" src="/thumb/${a.thumb}.png" alt="">` : '<span class="none">no image</span>'}</div><span class="tag">${a.kind}</span>${d ? `<span class="st ${d.action}">${LABEL[d.action]}</span>` : ''}<div class="info"><div class="nm" title="${esc(a.name)}">${esc(a.name)}</div><div class="use">${esc(useText(a))}</div>${top}</div></div>`;
+  }).join('') || `<p class="hint">${tab === 'review' ? 'Nothing needs a decision. Look through Everything if you want to be thorough, then go to Build.' : 'Nothing here.'}</p>`;
+  $$('#grid .a').forEach(el => el.onclick = e => {
+    const a = visible[+el.dataset.i];
+    if (e.ctrlKey || e.shiftKey) { sel.has(a.id) ? sel.delete(a.id) : sel.add(a.id); el.classList.toggle('sel'); drawSel(); } else openModal(+el.dataset.i);
+  });
+  drawSel();
+  const r = status?.project?.review;
+  if (r) {
+    const scanNote = r.ocr?.ran ? `Text scan read ${r.ocr.read} textures.` : `Text scan did NOT finish${r.ocr?.error ? ': ' + r.ocr.error : ''}. Check signs and posters by eye.`;
+    $('#reviewHint').textContent = `${r.assets} assets, ${r.flagged} high priority, ${r.pending} still undecided. ${scanNote} Flags are only hints: ctrl-click to select several.`;
+  }
+};
+const drawSel = () => { $('#selInfo').textContent = sel.size ? `${sel.size} selected` : ''; };
+$('#search').oninput = draw;
+
+const decide = async (ids, action) => {
+  const decision = action === 'clear' ? null : action === 'color' ? { action: 'color', color: '#6b6b6b' } : { action };
+  const r = await api('/api/decide', { ids, decision });
+  for (const id of ids) { if (decision) decisions[id] = decision; else delete decisions[id]; }
+  if (status?.project) { status.project.review = r.review; status.project.blockers = r.blockers; }
+};
+$$('[data-bulk]').forEach(b => b.onclick = async () => {
+  if (!sel.size) return;
+  await decide([...sel], b.dataset.bulk);
+  sel.clear(); draw(); drawBlockers();
+});
+
+// ---- modal ----
+const HELP = { material: 'Remove deletes every face using this texture. Blank keeps the geometry in plain grey.', decal: 'Remove deletes the decal from the map. Blank leaves a grey shape, so Remove is usually better.', model: 'Remove deletes every placed copy of this model.', sky: 'Remove leaves the place with its current sky.' };
+const openModal = i => {
+  modalIdx = i;
+  const a = visible[i];
+  if (!a) return closeModal();
+  $('#modal').classList.add('on');
+  $('#mImg').src = a.textures?.length ? `/api/full?id=${encodeURIComponent(a.id)}` : a.thumb ? `/thumb/${a.thumb}.png` : '';
+  $('#mName').textContent = a.name;
+  const extra = a.members?.length > 1 ? ` (${a.members.length} materials share this image)` : '';
+  $('#mUse').textContent = useText(a) + extra;
+  $('#mFlags').innerHTML = a.flags.map(f => `<span class="fl ${f.sev}" style="white-space:normal">${esc(f.why)}</span>`).join('') + (a.ocr ? `<div class="ocr">Text found: ${esc(a.ocr)}</div>` : '');
+  $('#mHelp').textContent = HELP[a.kind] ?? '';
+  const d = decisions[a.id];
+  $$('[data-act]').forEach(b => b.classList.toggle('main', d?.action === b.dataset.act));
+  $('#mReplace').style.display = a.kind === 'material' || a.kind === 'decal' ? '' : 'none';
+};
+const closeModal = () => { $('#modal').classList.remove('on'); modalIdx = -1; draw(); drawBlockers(); };
+const act = async action => {
+  const a = visible[modalIdx];
+  if (!a) return;
+  await decide([a.id], action);
+  const list = tab === 'review';
+  if (list) {
+    // The card leaves this tab, so the same index is already the next one.
+    const q = $('#search').value.trim().toLowerCase();
+    visible = assets.filter(x => passes(x, q));
+    if (visible[modalIdx]) openModal(modalIdx); else closeModal();
+  } else openModal(Math.min(modalIdx + 1, visible.length - 1));
+};
+$$('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act));
+$('#mClose').onclick = closeModal;
+$('#mPrev').onclick = () => openModal(Math.max(0, modalIdx - 1));
+$('#mNext').onclick = () => openModal(Math.min(visible.length - 1, modalIdx + 1));
+$('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
+$('#mReplace').onclick = () => $('#pngInput').click();
+$('#pngInput').onchange = async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  const a = visible[modalIdx];
+  if (!f || !a) return;
+  const r = await fetch(`/api/replace?id=${encodeURIComponent(a.id)}`, { method: 'POST', body: f });
+  const j = await r.json();
+  if (j.error) { alert(j.error); return; }
+  decisions[a.id] = { action: 'replace' };
+  status.project.review = j.review; status.project.blockers = j.blockers;
+  openModal(modalIdx);
+};
+document.addEventListener('keydown', e => {
+  if (modalIdx < 0 || e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === 'k') act('keep'); else if (k === 'r') act('remove'); else if (k === 'b') act('color');
+  else if (k === 'arrowright') $('#mNext').click(); else if (k === 'arrowleft') $('#mPrev').click(); else if (k === 'escape') closeModal();
+});
+
+// ---- build / upload ----
+const drawBlockers = () => {
+  const p = status?.project;
+  if (!p) return;
+  $('#blockers').innerHTML = (p.blockers ?? []).map(b => `<li>${esc(b)}</li>`).join('');
+  const noOcr = p.review?.ocr && !p.review.ocr.ran;
+  $('#ackWrap').style.display = noOcr ? 'flex' : 'none';
+  const pending = p.review?.pending > 0;
+  $('#buildBtn').disabled = pending || (noOcr && !$('#ackOcr').checked);
+};
+$('#ackOcr').onchange = drawBlockers;
+const statGrid = rows => `<div class="stat">${rows.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>`;
+const drawBuild = () => {
+  const p = status?.project, b = p?.build;
+  $('#buildStats').innerHTML = !b ? '' : (p.stale ? '<div class="warn">Decisions changed since this build. Rebuild before uploading.</div>' : '') + statGrid([
+    [b.glbFiles, 'geometry files'], [fmtB(b.glbBytes), 'geometry size'], [b.textures, 'textures'], [fmtB(b.textureBytes), 'texture size'],
+    [b.meshParts.toLocaleString(), 'MeshParts in place'], [(b.worldTris + b.propTris).toLocaleString(), 'triangles'], [b.propInstances, 'props placed'], [b.propModels, 'prop models'],
+    [b.partColliders.toLocaleString(), 'Part colliders'], [b.hullColliders.toLocaleString(), 'hull colliders'], [b.water, 'water volumes'], [b.lights, 'lights'],
+  ]) + (b.modelFailures?.length ? `<div class="warn">${b.modelFailures.length} model(s) could not be decoded: ${esc(b.modelFailures.map(m => m.model).join(', '))}</div>` : '')
+    + (b.replacerModelsPassedOver?.length ? `<div class="warn">${b.replacerModelsPassedOver.length} mod model(s) had no matching mesh, so the original was used: ${esc(b.replacerModelsPassedOver.join(', '))}</div>` : '')
+    + (b.oversizeMeshes ? `<div class="warn">${b.oversizeMeshes} mesh(es) are larger than Roblox's size limit.</div>` : '');
+};
+$('#buildBtn').onclick = async () => {
+  $('#buildErr').textContent = '';
+  try {
+    await api('/api/build', { maxTexture: +$('#optTex').value, normalMaps: $('#optNormals').checked, sky: $('#optSky').checked, brushParts: $('#optParts').checked, ackNoOcr: $('#ackOcr').checked });
+  } catch (e) { $('#buildErr').textContent = e.message; }
+};
+$('#uploadBtn').onclick = async () => {
+  $('#uploadErr').textContent = '';
+  try {
+    await api('/api/upload', { apiKey: $('#apiKey').value, keyFile: $('#keyFile').value.trim(), creatorType: $('#creatorType').value, creatorId: $('#creatorId').value.trim(), ackNoOcr: $('#ackOcr').checked });
+    $('#apiKey').value = '';
+  } catch (e) { $('#uploadErr').textContent = e.message; }
+};
+
+// ---- status loop ----
+const drawGames = () => {
+  if (gamesDrawn || !status) return;
+  gamesDrawn = true;
+  games = status.games;
+  $('#gameList').innerHTML = games.map(g => `<label class="check"><input type="checkbox" value="${esc(JSON.stringify(g.dirs))}" ${/Half-Life 2|Garry/.test(g.name) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<p class="hint">No Source games found. Add content folders above.</p>';
+};
+const onJobFinished = async job => {
+  if (job.error) {
+    const t = { scan: '#loadErr', build: '#buildErr', upload: '#uploadErr' }[job.name];
+    $(t).textContent = job.error;
+    return;
+  }
+  if (job.name === 'scan') {
+    const r = await api('/api/assets');
+    assets = r.assets; decisions = r.decisions; tab = 'review'; sel.clear();
+    $$('.step').forEach(s => { s.disabled = false; });
+    go('review'); draw();
+  }
+  if (job.name === 'upload') {
+    const r = job.result;
+    $('#uploadResult').innerHTML = r.ok ? `<div class="ok">Done: ${r.textures} textures and ${r.models} geometry files uploaded.</div>` : `<div class="err">${esc(r.problems.join('\n'))}</div>`;
+  }
+};
+const tick = async () => {
+  try {
+    status = await api('/api/status');
+    drawGames();
+    const hits = Object.entries(status.project?.overrides ?? {});
+    $('#modHits').textContent = hits.map(([p, n]) => `${p.split(/[\\/]/).pop()}: replaced ${n} file${n === 1 ? '' : 's'} on this map`).join('  ·  ');
+    const j = status.job;
+    const box = $('#job');
+    if (j?.running) {
+      box.style.display = 'block';
+      $('#jobLabel').textContent = `${j.stage}${j.total ? ` (${j.done}/${j.total})` : ''}`;
+      $('#jobBar').style.width = j.total ? `${100 * j.done / j.total}%` : '15%';
+    } else box.style.display = 'none';
+    // Compared by id: a job that fails instantly may never be seen running, but its error
+    // still has to reach the screen. Jobs from before this page opened are ignored.
+    if (j && !j.running && j.id !== seenJob) {
+      const fresh = booted;
+      seenJob = j.id;
+      if (fresh) await onJobFinished(j);
+    }
+    booted = true;
+    // Reopened or refreshed page: the server still holds the project, so pick it back up.
+    if (!assets.length && status.project && !j?.running) {
+      const r = await api('/api/assets');
+      assets = r.assets; decisions = r.decisions;
+      $$('.step').forEach(s => { s.disabled = false; });
+      $('#mapPath').value = status.project.map;
+      go('review'); draw();
+    }
+    $('#scanBtn').disabled = !!j?.running;
+    drawBlockers(); drawBuild();
+  } catch { /* the app was closed */ }
+};
+setInterval(tick, 700);
+tick();
+drawContent();
+</script>
+</body>
+</html>
