@@ -139,6 +139,7 @@ ul.plain{margin:6px 0 0;padding-left:18px;color:var(--dim);font-size:13px}
       <label class="check" style="margin-top:12px"><input type="checkbox" id="optNormals" checked> Include normal maps</label>
       <label class="check"><input type="checkbox" id="optSky" checked> Include skybox</label>
       <label class="check"><input type="checkbox" id="optParts"> Prepare brushes as Parts (adds flipped and rotated copies of some textures)</label>
+      <label class="check"><input type="checkbox" id="optOverlayParts" checked> Overlays and decals as Parts with Textures (shapes a Part can't show stay meshes)</label>
       <label class="check" id="ackWrap" style="display:none"><input type="checkbox" id="ackOcr"> I understand the text scan didn't finish, and I've checked for links myself</label>
       <div class="row" style="margin-top:12px"><button class="btn main" id="buildBtn">Build map</button></div>
       <div class="err" id="buildErr"></div>
@@ -396,7 +397,7 @@ const drawBuild = () => {
 $('#buildBtn').onclick = async () => {
   $('#buildErr').textContent = '';
   try {
-    await api('/api/build', { maxTexture: +$('#optTex').value, normalMaps: $('#optNormals').checked, sky: $('#optSky').checked, brushParts: $('#optParts').checked, ackNoOcr: $('#ackOcr').checked });
+    await api('/api/build', { maxTexture: +$('#optTex').value, normalMaps: $('#optNormals').checked, sky: $('#optSky').checked, brushParts: $('#optParts').checked, overlayParts: $('#optOverlayParts').checked, ackNoOcr: $('#ackOcr').checked });
   } catch (e) { $('#buildErr').textContent = e.message; }
 };
 $('#uploadBtn').onclick = async () => {

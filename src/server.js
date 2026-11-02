@@ -26,7 +26,7 @@ const state = { project: null, job: null };
 
 // ---- update check -------------------------------------------------------
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-const LATEST_RELEASE = 'https://api.github.com/repos/typicalmattt-source/source-map-importer/releases/latest';
+const LATEST_RELEASE = 'https://api.github.com/repos/typicalmattt-source/smi-release/releases/latest';
 
 /** True when version a is later than b. Both are dotted numbers such as 1.10.0. */
 export function isNewer(a, b) {
@@ -285,7 +285,7 @@ function pluginSection(p, name, page) {
     meshes: Object.entries(m.meshes), lib: Object.entries(m.lib), instances: m.instances, parts: m.parts,
     materials: m.materials, water: m.water, lights: m.lights,
     ropes: m.ropes ?? [], spawns: m.spawns ?? [], markers: m.markers ?? [], missingProps: m.missingProps ?? [],
-    brushes: m.brushes ?? [], clipParts: m.clipParts ?? [],
+    brushes: m.brushes ?? [], clipParts: m.clipParts ?? [], overlays: m.overlays ?? [],
   }[name];
   if (!list) throw new Error('unknown section');
   return { items: list.slice(page * PAGE, (page + 1) * PAGE), more: (page + 1) * PAGE < list.length };

@@ -110,7 +110,7 @@ local optBrushParts = toggle("Brushes as Parts (experimental)", false)
 local optColl = toggle("Colliders", true)
 local optWater = toggle("Terrain water", true)
 local optLights = toggle("Lights", true)
-local optMatchLight = toggle("Match Source lighting (Future, shadows)", true)
+local optMatchLight = toggle("Match Source lighting (Realistic, shadows)", true)
 local optSky = toggle("Sky and sun", true)
 local optRopes = toggle("Ropes and cables", true)
 local optSpawns = toggle("Spawn points", true)
@@ -226,6 +226,12 @@ local BRUSH_FACES = {
 	Enum.NormalId.Left, Enum.NormalId.Bottom, Enum.NormalId.Front,
 }
 
+-- The Part axes a Texture's U and V run along, in the same order as BRUSH_FACES.
+local BRUSH_FACE_AXES = {
+	{ "Z", "Y" }, { "X", "Z" }, { "X", "Y" },
+	{ "Z", "Y" }, { "X", "Z" }, { "X", "Y" },
+}
+
 local function brushColor(m)
 	if not m then return Color3.fromRGB(128, 128, 128) end
 	if m.solid then return Color3.fromHex(m.solid) end
@@ -248,7 +254,13 @@ local function dressBrush(part, b, materials, images)
 			t.Face = BRUSH_FACES[f[1] + 1]
 			t.Texture = imageUrl(images[m.color])
 			t.StudsPerTileU, t.StudsPerTileV = f[3], f[4]
-			t.OffsetStudsU, t.OffsetStudsV = f[5], f[6]
+			-- Offsets are worked out from the face's corner, but on a union a Texture starts at its centre.
+			local shiftU, shiftV = 0, 0
+			if part:IsA("UnionOperation") then
+				local axes = BRUSH_FACE_AXES[f[1] + 1]
+				shiftU, shiftV = part.Size[axes[1]] / 2, part.Size[axes[2]] / 2
+			end
+			t.OffsetStudsU, t.OffsetStudsV = f[5] + shiftU, f[6] + shiftV
 			if m.tint then t.Color3 = Color3.new(m.tint[1], m.tint[2], m.tint[3]) end
 			if m.alpha and m.alpha < 1 then t.Transparency = 1 - m.alpha end
 			t.Parent = part
@@ -318,7 +330,7 @@ local function buildBrushes(brushes, materials, images, parentOf, work, onStep)
 			part.Material = Enum.Material[m.material] or Enum.Material.SmoothPlastic
 		end
 		if part then
-			part.Name = b.pl and "BrushFace" or "Brush"
+			part.Name = b.ov and "Overlay" or b.pl and "BrushFace" or "Brush"
 			part.CanCollide = not (b.nc or b.pl)
 			part.CanTouch = false
 			-- A plate is only a surface, so rays and shadows belong to the solid underneath.
@@ -349,6 +361,7 @@ local function buildMap(info)
 	local brushParts = optBrushParts() and optWorld()
 	local parts = optColl() and section(brushParts and "clipParts" or "parts") or {}
 	local brushes = brushParts and section("brushes") or {}
+	local overlays = optWorld() and section("overlays") or {}
 	local water = optWater() and section("water") or {}
 	local lights = optLights() and section("lights") or {}
 	local ropes = optRopes() and section("ropes") or {}
@@ -548,6 +561,17 @@ local function buildMap(info)
 		work.Parent = nil
 		if not ok then error(failed) end
 		if failed > 0 then table.insert(problems, failed .. " brush(es) failed to cut") end
+	end
+
+	if #overlays > 0 then
+		local overlayFolder = Instance.new("Folder")
+		overlayFolder.Name = "Overlays"
+		overlayFolder.Parent = rootFolder
+		local ok, failed = pcall(buildBrushes, overlays, materials, images, function() return overlayFolder end, nil, function(done, total)
+			status(("Placing overlays (%d of %d)"):format(done, total), 0.92)
+		end)
+		if not ok then error(failed) end
+		if failed > 0 then table.insert(problems, failed .. " overlay(s) failed") end
 	end
 
 	status("Adding ropes, spawns and markers", 0.92)
@@ -762,17 +786,26 @@ local function buildMap(info)
 			local a = info.sun.ambient
 			if a then Lighting.OutdoorAmbient = Color3.fromRGB(a[1], a[2], a[3]) end
 		end
-		if info.fog then
-			Lighting.FogColor = Color3.fromRGB(info.fog.color[1], info.fog.color[2], info.fog.color[3])
-			Lighting.FogStart = info.fog.start
-			Lighting.FogEnd = info.fog["end"]
+		-- An Atmosphere overrides the Lighting fog settings, so this is the one that counts.
+		if info.fog and info.fog.density then
+			local air = Lighting:FindFirstChildOfClass("Atmosphere")
+			if not air then
+				air = Instance.new("Atmosphere")
+				air.Parent = Lighting
+			end
+			local color = Color3.fromRGB(info.fog.color[1], info.fog.color[2], info.fog.color[3])
+			air.Color = color
+			air.Decay = color
+			air.Density = info.fog.density
+			air.Offset = 0.25
+			air.Glare = 0
+			air.Haze = 0
 		end
 	end
 
 	if optMatchLight() then
-		if not pcall(function() Lighting.Technology = Enum.Technology.Future end) then
-			table.insert(problems, "Plugins can't change Lighting.Technology: set it to Future in Properties")
-		end
+		Lighting.LightingStyle = Enum.LightingStyle.Realistic
+		Lighting.PrioritizeLightingQuality = true
 		local sun = info.sun
 		Lighting.GlobalShadows = true
 		Lighting.EnvironmentSpecularScale = 0.2

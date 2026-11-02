@@ -167,13 +167,25 @@ export function noteEntity(scene, raw, isBrush, inSkybox) {
   for (const [k, v] of Object.entries(raw)) e[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
   const cls = e.classname ?? '';
   if (!cls) return;
+  // Mappers often tuck the fog controller into the skybox room, so this comes before that check.
+  if (cls === 'env_fog_controller' || cls === 'env_fog') {
+    const fog = {
+      color: vec3(e.fogcolor, [128, 128, 128]), start: Number(e.fogstart) || 0, end: Number(e.fogend) || 0,
+      maxDensity: Number(e.fogmaxdensity ?? 1), enabled: e.fogenable !== '0',
+    };
+    // Maps can hold several, for triggers to switch between. One that starts on wins.
+    if (!scene.fog?.enabled) scene.fog = fog;
+    return;
+  }
   const origin = vec3(e.origin);
   if (inSkybox?.(origin)) return;
   const yaw = vec3(e.angles)[1];
   if (cls === 'keyframe_rope' || cls === 'move_rope') {
     (scene.ropes ??= []).push({
       name: e.targetname?.toLowerCase() ?? null, next: e.nextkey?.toLowerCase() ?? null, origin,
-      slack: Number(e.slack ?? 25) || 0, width: Number(e.width ?? 2) || 2, material: (e.ropematerial ?? '').toLowerCase(),
+      slack: Number(e.slack) || 0, width: Number(e.width ?? 2) || 2, material: (e.ropematerial ?? '').toLowerCase(),
+      // The engine's segment count for each Type, and 5 for a rope with no Type key.
+      nodes: e.type === undefined ? 5 : [10, 4, 2][Number(e.type)] ?? 10,
     });
   } else if (/^info_player_/.test(cls)) {
     (scene.spawns ??= []).push({ cls, origin, yaw });
@@ -408,9 +420,6 @@ export function buildScene(map, vfs, opts = {}) {
       const ang = vec3(e.angles);
       if (Number(e.pitch)) ang[0] = Number(e.pitch);
       scene.sun = { color: raw.slice(0, 3), brightness: raw[3] ?? 200, ambient: amb.length >= 3 && amb.every(n => !Number.isNaN(n)) ? amb.slice(0, 3) : null, ambientBrightness: amb[3] ?? 200, angles: ang };
-    }
-    if (cls === 'env_fog_controller' || cls === 'env_fog') {
-      scene.fog = { color: vec3(e.fogcolor, [128, 128, 128]), start: Number(e.fogstart) || 0, end: Number(e.fogend) || 0, enabled: e.fogenable !== '0' };
     }
     if (cls === 'infodecal' && e.texture) {
       const origin = vec3(e.origin);

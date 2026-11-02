@@ -262,6 +262,48 @@ function plateFor(face, variantOf, onFace) {
   return { entry, mapped, baked };
 }
 
+const OVERLAY_FIT_TILES = 0.01, OVERLAY_FLAT_STUDS = 0.02;
+
+/** The texture gradient and offset across a flat polygon, from its corner UVs. Null if it isn't affine. */
+function uvPlane(pts, uv, n) {
+  let best = null, bestArea = 1e-9;
+  for (let i = 1; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const area = Math.abs(dot(cross(sub(pts[i], pts[0]), sub(pts[j], pts[0])), n));
+      if (area > bestArea) { bestArea = area; best = [i, j]; }
+    }
+  }
+  if (!best) return null;
+  const [i, j] = best;
+  const e1 = sub(pts[i], pts[0]), e2 = sub(pts[j], pts[0]);
+  const D = dot(cross(e1, e2), n);
+  const solve = c => {
+    const d1 = uv[i][c] - uv[0][c], d2 = uv[j][c] - uv[0][c];
+    const g = mul(sub(mul(cross(e2, n), d1), mul(cross(e1, n), d2)), 1 / D);
+    return { g, o: uv[0][c] - dot(g, pts[0]) };
+  };
+  const u = solve(0), v = solve(1);
+  const fits = pts.every((p, k) => Math.abs(dot(u.g, p) + u.o - uv[k][0]) < OVERLAY_FIT_TILES
+    && Math.abs(dot(v.g, p) + v.o - uv[k][1]) < OVERLAY_FIT_TILES);
+  return fits ? { gu: u.g, ou: u.o, gv: v.g, ov: v.o } : null;
+}
+
+/**
+ * One overlay or decal piece as an invisible thin Part carrying a Texture, sized to the piece. Texture
+ * sliding is what shows only part of an atlas. pts are in studs and n is the unit normal. Returns null
+ * when a Part can't show it faithfully, and the caller keeps that piece as a mesh.
+ */
+export function overlayPart(pts, uv, n, mat, variantOf, onFace = null) {
+  const d = dot(n, pts[0]);
+  if (pts.some(p => Math.abs(dot(n, p) - d) > OVERLAY_FLAT_STUDS)) return null;
+  const axes = uvPlane(pts, uv, n);
+  if (!axes) return null;
+  const made = plateFor({ n, d, pts, area: polyArea(pts), mat, ...axes }, variantOf, onFace);
+  // A trimmed piece would be a union, and a Texture's start on a union isn't settled yet.
+  if (!made || made.entry.t === 'c' || made.mapped.kind === 'skew' || (made.mapped.xf && made.baked === null)) return null;
+  return { ...made.entry, ov: 1, tr: 1 };
+}
+
 /**
  * Source image coordinates (u,v) for a point (s,t) of each baked copy. Written so that a
  * copy's pixel at (s,t) is the original's pixel at XFORMS[xf](s,t).

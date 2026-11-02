@@ -8,7 +8,8 @@ import { encodePng, decodePng, downscale } from './png.js';
 import { loadModel } from './mdl.js';
 import { materialCache, baseMatId, BLEND_MIX } from './scene.js';
 import { classifyBrushes, mergeBoxes, dispPatches } from './collision.js';
-import { buildBrushParts, XFORMS } from './brushparts.js';
+import { buildBrushParts, overlayPart, XFORMS } from './brushparts.js';
+import { hangingLength } from './rope.js';
 import { nameFlags } from './scan.js';
 import { sub, add, mul, dot, cross, unit, len, toRbx, angleMatrix, rotToRbx, applyM, lightDir } from './math.js';
 
@@ -51,9 +52,22 @@ function buildRopes(nodes, conv, scale) {
     const id = `${a}|${b}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ a, b, l: round3((best + Math.max(n.slack, 0)) * scale), w: round3(Math.max(n.width * 2 * scale, 0.08)), c: ropeColor(n.material) });
+    // The Width key is the rope's full width.
+    out.push({ a, b, l: round3(hangingLength(n.origin, to.origin, n.slack, n.nodes) * scale), w: round3(Math.max(n.width * scale, 0.04)), c: ropeColor(n.material) });
   }
   return out;
+}
+
+// Measured on a real map: Atmosphere Density 0.3 hides things about 1300 studs away, and how far
+// you can see scales inversely with density. Source fog is often only a few hundred studs deep,
+// which that would turn into a whiteout, so density stops at a level that still shows the sky.
+const FOG_REACH = 390, FOG_MAX_DENSITY = 0.45;
+
+/** A Source fog controller as Atmosphere settings, or null for a map with no working fog. */
+function atmosphereFog(fog, scale) {
+  if (!fog?.enabled || fog.end <= 0) return null;
+  const density = Math.min(FOG_REACH / (fog.end * scale), FOG_MAX_DENSITY) * Math.min(Math.max(fog.maxDensity, 0), 1);
+  return { color: fog.color, density: round3(Math.max(density, 0.01)) };
 }
 
 /** A compressed HDR sky keeps a brightness multiplier in alpha. Used when there's no plain fallback. */
@@ -363,7 +377,25 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
   const allMeshes = [];
   const pushMesh = (mesh, extra) => { Object.assign(mesh, extra); allMeshes.push(mesh); return mesh; };
 
+  // The Parts alternative. Exact orientation needs extra images, so those only exist on request.
+  const variants = new Map();
+  const variantOf = (matId, xf) => {
+    if (!opts.brushParts && !opts.overlayParts) return null;
+    const base = materials[matId];
+    if (!base.color) return null;
+    const key = `${matId}|${xf}`;
+    if (!variants.has(key)) {
+      const color = textures.oriented(base.color, xf, base.hasAlpha);
+      const m = { ...base, id: materials.length, color, normal: undefined };
+      materials.push(m);
+      variants.set(key, m.id);
+    }
+    return variants.get(key);
+  };
+
   // World geometry: per material, per spatial cell.
+  const overlayParts = [];
+  let overlayMeshes = 0;
   let meshNo = 0;
   const removed = { faces: 0, props: 0, overlays: 0, decals: 0 };
   const isRemoved = id => decisionOf(id)?.action === 'remove';
@@ -439,6 +471,11 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     const mt = matFor(id);
     const cells = new Map();
     for (const p of polys) {
+      if (p.overlay && opts.overlayParts) {
+        const part = mt.color ? overlayPart(p.pts.map(conv), p.uv, unit(convN(p.faceN)), mt.id, variantOf, opts.onBrushFace) : null;
+        if (part) { overlayParts.push(part); continue; }
+        overlayMeshes++;
+      }
       let cx = 0, cy = 0, cz = 0;
       for (const v of p.pts) { cx += v[0]; cy += v[1]; cz += v[2]; }
       const n = p.pts.length;
@@ -620,21 +657,6 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     }
   }
 
-  // The Parts alternative. Exact orientation needs extra images, so those only exist on request.
-  const variants = new Map();
-  const variantOf = (matId, xf) => {
-    if (!opts.brushParts) return null;
-    const base = materials[matId];
-    if (!base.color) return null;
-    const key = `${matId}|${xf}`;
-    if (!variants.has(key)) {
-      const color = textures.oriented(base.color, xf, base.hasAlpha);
-      const m = { ...base, id: materials.length, color, normal: undefined };
-      materials.push(m);
-      variants.set(key, m.id);
-    }
-    return variants.get(key);
-  };
   for (const b of scene.brushes ?? []) if (b.door) b.door.name = safeText(b.door.name);
   // A BSP gives each cubemap-patched copy of a material its own name, so a brush side can name
   // one the drawn faces don't. Matching on the image finds it, and that image has been reviewed.
@@ -761,8 +783,7 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
 
   const manifest = {
     format: 1, map: scene.mapName, scale, materials, meshes, lib, instances, parts, water, lights, ropes, spawns, markers, missingProps, sky, sun,
-    brushes: brushBuild.brushes, clipParts,
-    fog: scene.fog?.enabled ? { color: scene.fog.color, start: round3(scene.fog.start * scale), end: round3(scene.fog.end * scale) } : null,
+    brushes: brushBuild.brushes, clipParts, overlays: overlayParts, fog: atmosphereFog(scene.fog, scale),
     files, textures: texList,
   };
   fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest));
@@ -776,7 +797,7 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     textures: usedTex.size, textureBytes: [...usedTex].reduce((s, h) => s + textures.files.get(h).bytes, 0),
     worldTris, propTris, propInstances: instances.length, propModels: Object.keys(lib).length,
     water: water.length, lights: lights.length, lightsLeftOut: Math.max(0, allLights.length - (opts.maxLights ?? 150)), lightPanels: Math.min(panels.length, MAX_PANELS), ropes: ropes.length, spawns: spawns.length, markers: markers.length,
-    brushParts: brushBuild.stats,
+    brushParts: brushBuild.stats, overlayParts: overlayParts.length, overlayMeshes,
     removed, modelFailures: failures, replacerModelsPassedOver: [...new Set(passedOver)],
     droppedBadTriangles: MeshBuilder.dropped, skyMissing,
     maxMeshTris: allMeshes.reduce((s, m) => Math.max(s, m.triCount), 0),

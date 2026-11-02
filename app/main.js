@@ -22,7 +22,7 @@ ipcMain.handle('pick', async (_, kind) => {
 });
 
 // A fixed address, so the page can never ask the app to open anything else.
-ipcMain.handle('open-releases', () => shell.openExternal('https://github.com/typicalmattt-source/source-map-importer/releases/latest'));
+ipcMain.handle('open-releases', () => shell.openExternal('https://github.com/typicalmattt-source/smi-release/releases/latest'));
 
 async function createWindow(url) {
   win = new BrowserWindow({
