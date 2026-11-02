@@ -7,7 +7,7 @@ import { decodeVtf } from './vtf.js';
 import { encodePng, decodePng, downscale } from './png.js';
 import { loadModel } from './mdl.js';
 import { materialCache, baseMatId, BLEND_MIX } from './scene.js';
-import { classifyBrushes, mergeBoxes } from './collision.js';
+import { classifyBrushes, mergeBoxes, dispPatches } from './collision.js';
 import { buildBrushParts, XFORMS } from './brushparts.js';
 import { nameFlags } from './scan.js';
 import { sub, add, mul, dot, cross, unit, len, toRbx, angleMatrix, rotToRbx, applyM, lightDir } from './math.js';
@@ -17,6 +17,9 @@ const MAX_VERTS = 50000;
 const CELL = 2048;               // Source units per chunk: about 140 studs
 const MAX_MESHES_PER_GLB = 150;
 const MAX_GLB_BYTES = 15 * 1024 * 1024; // Open Cloud's limit is 20 MB
+const TERRAIN_TOLERANCE = 10;    // Source units a terrain patch may stray from flat before it splits
+const TERRAIN_DEPTH = 12;        // Colliders are solid slabs, so nothing tunnels through a sheet
+const MAX_PANELS = 64;           // Glowing light textures that get a real light, largest first
 
 const round3 = v => Math.round(v * 1000) / 1000;
 
@@ -51,6 +54,20 @@ function buildRopes(nodes, conv, scale) {
     out.push({ a, b, l: round3((best + Math.max(n.slack, 0)) * scale), w: round3(Math.max(n.width * 2 * scale, 0.08)), c: ropeColor(n.material) });
   }
   return out;
+}
+
+/** A compressed HDR sky keeps a brightness multiplier in alpha. Used when there's no plain fallback. */
+export function expandHdrSky(img) {
+  const rgba = Buffer.alloc(img.rgba.length);
+  for (let i = 0; i < rgba.length; i += 4) {
+    const gain = img.rgba[i + 3] / 255 * 16;
+    for (let c = 0; c < 3; c++) {
+      const v = Math.pow(img.rgba[i + c] / 255, 2.2) * gain;
+      rgba[i + c] = Math.min(255, Math.pow(v / (1 + v), 1 / 2.2) * 255);
+    }
+    rgba[i + 3] = 255;
+  }
+  return { rgba, width: img.width, height: img.height };
 }
 
 export function halfTurn(img) {
@@ -434,7 +451,7 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
       const isDisp = k.endsWith(',1');
       const flush = mb => {
         if (!mb.tris) return;
-        pushMesh(mb.finish(`W${String(meshNo++).padStart(5, '0')}`), { mat: mt.id, kind: isDisp ? 'disp' : 'world', coll: isDisp ? 'precise' : 'none', overlay: list.every(p => p.overlay) });
+        pushMesh(mb.finish(`W${String(meshNo++).padStart(5, '0')}`), { mat: mt.id, kind: isDisp ? 'disp' : 'world', coll: 'none', overlay: list.every(p => p.overlay) });
       };
       let mb = new MeshBuilder();
       for (const p of list) {
@@ -568,6 +585,41 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     if (mb.tris) pushMesh(mb.finish(`H${String(hullNo++).padStart(5, '0')}`), { kind: 'hull', coll: polys.toolOnly ? 'clip' : 'hull' });
   }
 
+  // Terrain colliders. These stay in Parts builds, where the hulls above are dropped.
+  let terrainNo = 0;
+  for (const grid of scene.dispGrids ?? []) {
+    if (isRemoved(grid.mat)) continue;
+    for (const { rows, nrm } of dispPatches(grid, TERRAIN_TOLERANCE)) {
+      const mb = new MeshBuilder();
+      const below = p => sub(p, mul(nrm, TERRAIN_DEPTH));
+      const n = convN(nrm), back = mul(n, -1), flat = [0, 0];
+      const face = (a, b, c, out, normal) => {
+        const order = dot(cross(sub(b, a), sub(c, a)), out) >= 0 ? [a, b, c] : [a, c, b];
+        mb.tri(...order.map(p => [conv(p), normal, flat]));
+      };
+      const last = rows.length - 1;
+      for (let i = 0; i < last; i++) {
+        for (let j = 0; j < last; j++) {
+          const q = [rows[i][j], rows[i + 1][j], rows[i + 1][j + 1], rows[i][j + 1]];
+          face(q[0], q[1], q[2], nrm, n);
+          face(q[0], q[2], q[3], nrm, n);
+          face(below(q[0]), below(q[1]), below(q[2]), mul(nrm, -1), back);
+          face(below(q[0]), below(q[2]), below(q[3]), mul(nrm, -1), back);
+        }
+      }
+      const middle = rows[0][0].map((_, k) => (rows[0][0][k] + rows[last][last][k]) / 2);
+      const edge = [];
+      for (let t = 0; t < last; t++) edge.push([rows[0][t], rows[0][t + 1]], [rows[t][last], rows[t + 1][last]], [rows[last][t], rows[last][t + 1]], [rows[t][0], rows[t + 1][0]]);
+      for (const [a, b] of edge) {
+        const out = sub(mul(add(a, b), 0.5), middle);
+        const side = toRbx(unit(out));
+        face(a, b, below(b), out, side);
+        face(a, below(b), below(a), out, side);
+      }
+      if (mb.tris) pushMesh(mb.finish(`T${String(terrainNo++).padStart(5, '0')}`), { kind: 'hull', coll: 'terrain' });
+    }
+  }
+
   // The Parts alternative. Exact orientation needs extra images, so those only exist on request.
   const variants = new Map();
   const variantOf = (matId, xf) => {
@@ -621,7 +673,8 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
 
   // Skybox
   let sky = null;
-  if (scene.sky && !isRemoved(`sky:${scene.sky}`) && opts.sky !== false) {
+  const skyMissing = [];
+  if (scene.sky &&!isRemoved(`sky:${scene.sky}`) && opts.sky !== false) {
     const out = {};
     // Source: rt=+X, lf=-X, bk=+Y, ft=-Y. Measured in Studio: SkyboxLf shows +X, SkyboxRt shows -X,
     // SkyboxFt shows -Z (Source +Y), and Source's up face needs a half turn to meet the sides.
@@ -629,8 +682,9 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
     for (const [src, dst] of Object.entries(map)) {
       const desc = getMat(`skybox/${scene.sky}${src}`);
       const name = desc.base ?? `skybox/${scene.sky}${src}`;
-      const img = textures.vtf(name, 1024);
-      if (!img) continue;
+      const raw = textures.vtf(name, 1024);
+      if (!raw) { skyMissing.push(src); continue; }
+      const img = desc.hdrCompressed ? expandHdrSky(raw) : raw;
       const face = dst === 'Up' ? halfTurn(img) : dst === 'Dn' ? img : squareSkySide(img);
       out[dst] = textures.save(encodePng(face.rgba, face.width, face.height, { alpha: false }));
     }
@@ -638,7 +692,8 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
   }
 
   // Lights: brightest first, capped, because each one has a runtime cost.
-  const lights = [...scene.lights].sort((a, b) => b.brightness - a.brightness).slice(0, opts.maxLights ?? 150).map(l => {
+  const allLights = [...scene.lights].sort((a, b) => b.brightness - a.brightness);
+  const lights = allLights.slice(0, opts.maxLights ?? 150).map(l => {
     let dir = null;
     if (l.spot) {
       const a = [...l.angles];
@@ -649,9 +704,31 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
       p: conv(l.origin).map(round3), c: l.color,
       b: round3(Math.min(3, l.brightness / 200)),
       r: Math.round(Math.min(60, l.distance > 0 ? l.distance * scale : Math.sqrt(l.brightness) * 2.2)),
+      // Matched to Future lighting with shadows, which is much brighter for the same number.
+      fb: round3(l.brightness / 800),
+      fr: Math.round(Math.min(60, l.distance > 0 ? l.distance * scale : 60)),
       ...(dir ? { d: dir, a: Math.round(l.cone) } : {}),
     };
   });
+
+  // Light panels: Source lights these from the texture at compile time, so they have no entity.
+  const panels = [];
+  for (const [id, polys] of scene.polys) {
+    if (!/(^|\/)lights\//.test(baseMatId(id)) || isRemoved(id)) continue;
+    const avg = matIndex.get(id)?.avg ?? [255, 255, 255];
+    const peak = Math.max(...avg, 1);
+    for (const p of polys) {
+      if (p.overlay || p.disp || !p.faceN) continue;
+      let area = 0;
+      for (let i = 1; i + 1 < p.pts.length; i++) area += len(cross(sub(p.pts[i], p.pts[0]), sub(p.pts[i + 1], p.pts[0]))) / 2;
+      const mid = p.pts.reduce((s, v) => add(s, v), [0, 0, 0]).map(v => v / p.pts.length);
+      panels.push({ area, mid, n: unit(p.faceN), c: avg.map(v => Math.round(v * 255 / peak)) });
+    }
+  }
+  panels.sort((a, b) => b.area - a.area);
+  for (const p of panels.slice(0, MAX_PANELS)) {
+    lights.push({ pn: 1, p: conv(add(p.mid, p.n)).map(round3), c: p.c, b: 0, r: 0, fb: 0.2, fr: 16, d: toRbx(p.n).map(round3), a: 90 });
+  }
 
   const ropes = buildRopes(scene.ropes ?? [], conv, scale);
   const facing = yaw => toRbx([Math.cos(yaw * Math.PI / 180), Math.sin(yaw * Math.PI / 180), 0]).map(round3);
@@ -668,7 +745,7 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
 
   const sun = scene.sun && {
     dir: toRbx(mul(lightDir(scene.sun.angles), -1)).map(round3),
-    color: scene.sun.color, ambient: scene.sun.ambient,
+    color: scene.sun.color, brightness: scene.sun.brightness, ambient: scene.sun.ambient, ambientBrightness: scene.sun.ambientBrightness,
   };
 
   const usedTex = new Set();
@@ -695,13 +772,13 @@ export async function exportScene({ scene, vfs, outDir, decisions = {}, opts = {
   const stats = {
     glbFiles: files.length, glbBytes: files.reduce((s, f) => s + f.bytes, 0),
     meshParts: allMeshes.filter(m => m.kind !== 'hull' && m.kind !== 'prop').length + instances.reduce((s, i) => s + lib[i.k].parts.length, 0),
-    uniqueMeshes: allMeshes.length, hullColliders: cls.hulls.length, partColliders: parts.length,
+    uniqueMeshes: allMeshes.length, hullColliders: cls.hulls.length, terrainColliders: terrainNo, partColliders: parts.length,
     textures: usedTex.size, textureBytes: [...usedTex].reduce((s, h) => s + textures.files.get(h).bytes, 0),
     worldTris, propTris, propInstances: instances.length, propModels: Object.keys(lib).length,
-    water: water.length, lights: lights.length, ropes: ropes.length, spawns: spawns.length, markers: markers.length,
+    water: water.length, lights: lights.length, lightsLeftOut: Math.max(0, allLights.length - (opts.maxLights ?? 150)), lightPanels: Math.min(panels.length, MAX_PANELS), ropes: ropes.length, spawns: spawns.length, markers: markers.length,
     brushParts: brushBuild.stats,
     removed, modelFailures: failures, replacerModelsPassedOver: [...new Set(passedOver)],
-    droppedBadTriangles: MeshBuilder.dropped,
+    droppedBadTriangles: MeshBuilder.dropped, skyMissing,
     maxMeshTris: allMeshes.reduce((s, m) => Math.max(s, m.triCount), 0),
     oversizeMeshes: allMeshes.filter(m => Math.max(...m.size) > 2048).length,
   };

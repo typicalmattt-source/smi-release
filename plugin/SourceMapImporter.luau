@@ -110,6 +110,7 @@ local optBrushParts = toggle("Brushes as Parts (experimental)", false)
 local optColl = toggle("Colliders", true)
 local optWater = toggle("Terrain water", true)
 local optLights = toggle("Lights", true)
+local optMatchLight = toggle("Match Source lighting (Future, shadows)", true)
 local optSky = toggle("Sky and sun", true)
 local optRopes = toggle("Ropes and cables", true)
 local optSpawns = toggle("Spawn points", true)
@@ -403,7 +404,7 @@ local function buildMap(info)
 			if m.k == "world" or m.k == "disp" or m.k == "hull" then
 				local wanted = (m.k == "hull" and optColl()) or (m.k ~= "hull" and optWorld())
 				-- Parts replace flat world meshes and their hulls. Terrain, overlays and clip hulls stay.
-				if brushParts and ((m.k == "world" and not m.ov) or (m.k == "hull" and m.cl ~= "clip")) then
+				if brushParts and ((m.k == "world" and not m.ov) or (m.k == "hull" and m.cl ~= "clip" and m.cl ~= "terrain")) then
 					wanted = false
 				end
 				local part = loaded[name]
@@ -415,7 +416,8 @@ local function buildMap(info)
 						fidelity(part, Enum.CollisionFidelity.Hull)
 						part.Parent = collFolder
 					else
-						local solid = m.k == "disp"
+						-- A map exported before terrain colliders still needs its terrain to collide.
+						local solid = m.k == "disp" and m.cl ~= "none"
 						prep(part, m.c, m.s, solid)
 						fidelity(part, solid and Enum.CollisionFidelity.PreciseConvexDecomposition or Enum.CollisionFidelity.Box)
 						if m.m then applyMaterial(part, materials[m.m + 1], images) end
@@ -708,7 +710,9 @@ local function buildMap(info)
 		holder.Size = Vector3.one
 		holder.CFrame = CFrame.new()
 		holder.Parent = rootFolder
+		local matchLight = optMatchLight()
 		for _, l in lights do
+			if l.pn and not matchLight then continue end
 			local a = Instance.new("Attachment")
 			a.Position = Vector3.new(l.p[1], l.p[2], l.p[3])
 			local li
@@ -721,9 +725,9 @@ local function buildMap(info)
 				li = Instance.new("PointLight")
 			end
 			li.Color = Color3.fromRGB(l.c[1], l.c[2], l.c[3])
-			li.Brightness = l.b
-			li.Range = l.r
-			li.Shadows = false
+			li.Brightness = matchLight and l.fb or l.b
+			li.Range = matchLight and l.fr or l.r
+			li.Shadows = matchLight
 			li.Parent = a
 			a.Parent = holder
 		end
@@ -762,6 +766,32 @@ local function buildMap(info)
 			Lighting.FogColor = Color3.fromRGB(info.fog.color[1], info.fog.color[2], info.fog.color[3])
 			Lighting.FogStart = info.fog.start
 			Lighting.FogEnd = info.fog["end"]
+		end
+	end
+
+	if optMatchLight() then
+		if not pcall(function() Lighting.Technology = Enum.Technology.Future end) then
+			table.insert(problems, "Plugins can't change Lighting.Technology: set it to Future in Properties")
+		end
+		local sun = info.sun
+		Lighting.GlobalShadows = true
+		Lighting.EnvironmentSpecularScale = 0.2
+		Lighting.EnvironmentDiffuseScale = 0.2
+		Lighting.OutdoorAmbient = Color3.new()
+		Lighting.Ambient = Color3.new()
+		-- A map with no light_environment has no sun in Source either.
+		Lighting.Brightness = sun and 2 or 0
+		if sun then
+			local a = sun.ambient
+			if a then
+				-- Source fills shadows with baked bounce light, which Roblox lacks. Without a floor, maps
+				-- with a low ambient value (most of L4D2) get pitch black shadows.
+				local level = math.clamp((sun.ambientBrightness or 200) / 400, 0.2, 1)
+				Lighting.Ambient = Color3.fromRGB(a[1], a[2], a[3]):Lerp(Color3.new(), 1 - level)
+			end
+			local c = sun.color
+			if c then Lighting.ColorShift_Top = Color3.fromRGB(c[1], c[2], c[3]) end
+			Lighting.ExposureCompensation = math.clamp((sun.brightness or 200) / 1000, -3, 3)
 		end
 	end
 

@@ -120,7 +120,11 @@ export function describeMaterial(mat, nameIfMissing) {
     isWater,
     isTool,
     isSky,
-    base: texPath(p.$basetexture) ?? texPath(p.$hdrbasetexture) ?? texPath(p.$iris),
+    base: texPath(p.$basetexture) ?? texPath(p.$hdrbasetexture) ?? texPath(p.$iris) ?? texPath(p.$hdrcompressedtexture),
+    // Stored as colour plus a brightness multiplier in alpha, so it needs expanding before use.
+    hdrCompressed: !p.$basetexture && !p.$hdrbasetexture && !p.$iris && !!p.$hdrcompressedtexture,
+    fallback: typeof p.$fallbackmaterial === 'string' ? p.$fallbackmaterial
+      : Object.values(p).find(v => typeof v?.$fallbackmaterial === 'string')?.$fallbackmaterial ?? null,
     base2: texPath(p.$basetexture2),
     bump: texPath(p.$bumpmap) ?? texPath(p.$normalmap),
     translucent: truthy(p.$translucent) || truthy(p.$additive) && shader !== 'modulate',

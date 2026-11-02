@@ -194,3 +194,48 @@ export function mergeBoxes(parts) {
   const merged = boxes.map(b => ({ t: 'b', cf: r3([...b.c, 1, 0, 0, 0, 1, 0, 0, 0, 1]), s: r3(b.s) }));
   return [...merged, ...rest];
 }
+
+/**
+ * Cut a displacement into patches flat enough to collide as one convex piece. A surface drawn
+ * per material can be scattered pieces, and Roblox fills the gaps between pieces of one mesh,
+ * so the collider follows the displacement itself and never the materials painted on it.
+ * tolerance is how far a patch may stray from flat, in Source units.
+ */
+export function dispPatches(grid, tolerance) {
+  const size = Math.round(Math.sqrt(grid.pos.length));
+  if (size < 2 || size * size !== grid.pos.length) return [];
+  const at = (i, j) => grid.pos[i * size + j];
+  const out = [];
+  const normalOf = (i, j, n) => {
+    const raw = cross(sub(at(i + n, j + n), at(i, j)), sub(at(i, j + n), at(i + n, j)));
+    let side = [0, 0, 0];
+    for (let a = i; a <= i + n; a++) for (let b = j; b <= j + n; b++) side = add(side, grid.nrm[a * size + b]);
+    if (len(raw) < 1e-6) return len(side) > 1e-6 ? unit(side) : [0, 0, 1];
+    return dot(raw, side) >= 0 ? unit(raw) : mul(unit(raw), -1);
+  };
+  const split = (i, j, n) => {
+    const nrm = normalOf(i, j, n);
+    let lo = Infinity, hi = -Infinity;
+    for (let a = i; a <= i + n; a++) {
+      for (let b = j; b <= j + n; b++) {
+        const h = dot(at(a, b), nrm);
+        if (h < lo) lo = h;
+        if (h > hi) hi = h;
+      }
+    }
+    if (n > 1 && hi - lo > tolerance) {
+      const half = n >> 1;
+      split(i, j, half); split(i + half, j, half); split(i, j + half, half); split(i + half, j + half, half);
+      return;
+    }
+    const rows = [];
+    for (let a = i; a <= i + n; a++) {
+      const row = [];
+      for (let b = j; b <= j + n; b++) row.push(at(a, b));
+      rows.push(row);
+    }
+    out.push({ rows, nrm });
+  };
+  split(0, 0, size - 1);
+  return out;
+}

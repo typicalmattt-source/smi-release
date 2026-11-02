@@ -8,7 +8,7 @@ import { clipOverlay } from './overlay.js';
 
 const SKIP_CLASSES = /^(trigger_|func_areaportal|func_occluder|func_viscluster|func_clip|func_precipitation|func_dustmotes|func_dustcloud|func_smokevolume|func_buyzone|func_bomb_target|func_hostage_rescue|func_ladder|func_nav_|func_playerinfected|func_lod$|func_vehicleclip|func_vehicle_clip)/;
 const MOVE_ANGLES = /^(func_door$|func_movelinear|func_button|momentary_door|func_water_analog)/;
-const PROP_CLASSES = /^(prop_static|prop_dynamic|prop_dynamic_override|prop_dynamic_ornament|prop_physics|prop_physics_override|prop_physics_multiplayer|prop_door_rotating|prop_detail)$/;
+const PROP_CLASSES = /^(prop_static|prop_dynamic|prop_dynamic_override|prop_dynamic_ornament|prop_physics|prop_physics_override|prop_physics_multiplayer|prop_door_rotating|prop_door_rotating_checkpoint|prop_detail)$/;
 
 export function materialCache(vfs) {
   const cache = new Map();
@@ -17,10 +17,24 @@ export function materialCache(vfs) {
     let d = cache.get(id);
     if (!d) {
       d = describeMaterial(loadMaterial(vfs, id), id);
+      // HDR skies name a plain 8-bit version as their fallback, which is ready to use as it is.
+      if (d.fallback && (!d.base || d.hdrCompressed)) {
+        const plain = describeMaterial(loadMaterial(vfs, d.fallback), d.fallback);
+        if (plain.base && vfs.read(`materials/${plain.base}.vtf`)) d = { ...d, base: plain.base, hdrCompressed: false };
+      }
       cache.set(id, d);
     }
     return d;
   };
+}
+
+/** A rotating door can start open: spawnpos 1 swings it forward, 2 swings it back. */
+export function doorAngles(angles, cls, spawnpos, distance) {
+  if (!/^prop_door_rotating/.test(cls)) return angles;
+  const pos = Number(spawnpos) || 0;
+  if (pos !== 1 && pos !== 2) return angles;
+  const swing = Number(distance) || 90;
+  return [angles[0], angles[1] + (pos === 1 ? swing : -swing), angles[2]];
 }
 
 function facePolygon(map, face) {
@@ -169,7 +183,9 @@ export function noteEntity(scene, raw, isBrush, inSkybox) {
 }
 
 /** Add one finished displacement to the scene, slicing two-texture blends into bands. */
-export function emitDisplacement(d, addPoly) {
+export function emitDisplacement(d, addPoly, grids) {
+  // The whole surface, kept for colliders: the drawn pieces below are split up by material.
+  if (!d.noPhysics) grids.push({ pos: d.pos, nrm: d.nrm, mat: d.mat.id });
   const vert = i => ({ p: d.pos[i], u: d.uv[i], n: d.nrm[i], a: d.alpha[i] });
   let rest = [];
   for (let t = 0; t < d.tris.length; t += 3) rest.push([vert(d.tris[t]), vert(d.tris[t + 1]), vert(d.tris[t + 2])]);
@@ -189,7 +205,7 @@ export function buildScene(map, vfs, opts = {}) {
   const getMat = materialCache(vfs);
   const scene = {
     polys: new Map(), // materialId -> [{pts,nrm,uv,disp?}]
-    entitiesUsed: [], props: [], lights: [], water: [], decals: [], solids: [], dispSolids: [],
+    entitiesUsed: [], props: [], lights: [], water: [], decals: [], solids: [], dispSolids: [], dispGrids: [],
     getMat, warnings: [], sky: null, sun: null, mapName: opts.mapName ?? 'map', stats: {},
   };
   const addPoly = (mat, poly) => {
@@ -298,7 +314,7 @@ export function buildScene(map, vfs, opts = {}) {
 
   // Displacements: smooth once, then split two-texture blends.
   if (disps.length) smoothDisplacements(disps);
-  for (const d of disps) emitDisplacement(d, addPoly);
+  for (const d of disps) emitDisplacement(d, addPoly, scene.dispGrids);
   scene.dispCount = disps.length;
 
   // Convex solids: colliders and water volumes.
@@ -370,7 +386,7 @@ export function buildScene(map, vfs, opts = {}) {
       if (inSkybox(origin)) continue;
       const rc = vec3(e.rendercolor, [255, 255, 255]);
       scene.props.push({
-        model: e.model.replace(/\\/g, '/').toLowerCase(), origin, angles: vec3(e.angles), scale: Number(e.modelscale) || 1,
+        model: e.model.replace(/\\/g, '/').toLowerCase(), origin, angles: doorAngles(vec3(e.angles), cls, e.spawnpos, e.distance), scale: Number(e.modelscale) || 1,
         skin: Number(e.skin) || 0, body: Number(e.body ?? e.SetBodyGroup ?? e.setbodygroup) || 0, solid: e.solid !== '0',
         tint: [...rc, Number(e.renderamt) || 255], cls, name: e.targetname ?? null,
         hardware: cls === 'prop_door_rotating' ? Number(e.hardware) || 0 : null,
@@ -391,7 +407,7 @@ export function buildScene(map, vfs, opts = {}) {
       const amb = (e._ambient ?? '').trim().split(/\s+/).map(Number);
       const ang = vec3(e.angles);
       if (Number(e.pitch)) ang[0] = Number(e.pitch);
-      scene.sun = { color: raw.slice(0, 3), brightness: raw[3] ?? 200, ambient: amb.length >= 3 && amb.every(n => !Number.isNaN(n)) ? amb.slice(0, 3) : null, angles: ang };
+      scene.sun = { color: raw.slice(0, 3), brightness: raw[3] ?? 200, ambient: amb.length >= 3 && amb.every(n => !Number.isNaN(n)) ? amb.slice(0, 3) : null, ambientBrightness: amb[3] ?? 200, angles: ang };
     }
     if (cls === 'env_fog_controller' || cls === 'env_fog') {
       scene.fog = { color: vec3(e.fogcolor, [128, 128, 128]), start: Number(e.fogstart) || 0, end: Number(e.fogend) || 0, enabled: e.fogenable !== '0' };

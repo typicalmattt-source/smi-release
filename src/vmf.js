@@ -1,7 +1,7 @@
 // Hammer .vmf input. Produces the same scene shape as the BSP path. A VMF has no
 // visibility data or pakfile, so custom content must sit in a folder beside it, or in a
 // same-named .bsp, which the loader mounts.
-import { materialCache, emitDisplacement, noteEntity } from './scene.js';
+import { materialCache, emitDisplacement, noteEntity, doorAngles } from './scene.js';
 import { normMat } from './vmt.js';
 import { vtfInfo } from './vtf.js';
 import { brushPolys } from './collision.js';
@@ -76,7 +76,7 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
   const root = parseVmf(text);
   const getMat = materialCache(vfs);
   const scene = {
-    polys: new Map(), props: [], lights: [], water: [], decals: [], solids: [], overlays: [],
+    polys: new Map(), props: [], lights: [], water: [], decals: [], solids: [], overlays: [], dispGrids: [],
     getMat, sky: null, sun: null, mapName: opts.mapName ?? 'map', dispCount: 0,
   };
   const addPoly = (m, p) => (scene.polys.get(m) ?? scene.polys.set(m, []).get(m)).push(p);
@@ -196,9 +196,9 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
     noteEntity(scene, e.k, solids.length > 0);
     const model = key(e, 'model');
     const origin = vec3(key(e, 'origin'));
-    if (/^prop_(static|dynamic|dynamic_override|physics|physics_override|physics_multiplayer|door_rotating)$/.test(cls) && model && /\.mdl$/i.test(model)) {
+    if (/^prop_(static|dynamic|dynamic_override|physics|physics_override|physics_multiplayer|door_rotating|door_rotating_checkpoint)$/.test(cls) && model && /\.mdl$/i.test(model)) {
       scene.props.push({
-        model: model.replace(/\\/g, '/').toLowerCase(), origin, angles: vec3(key(e, 'angles')),
+        model: model.replace(/\\/g, '/').toLowerCase(), origin, angles: doorAngles(vec3(key(e, 'angles')), cls, key(e, 'spawnpos'), key(e, 'distance')),
         scale: Number(key(e, 'modelscale') ?? key(e, 'uniformscale')) || 1, skin: Number(key(e, 'skin')) || 0, body: Number(key(e, 'body') ?? key(e, 'setbodygroup')) || 0,
         solid: key(e, 'solid') !== '0', tint: [...vec3(key(e, 'rendercolor'), [255, 255, 255]), Number(key(e, 'renderamt') ?? 255)], cls,
         name: key(e, 'targetname') ?? null,
@@ -219,7 +219,7 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
       const amb = (key(e, '_ambient') ?? '').trim().split(/\s+/).map(Number);
       const ang = vec3(key(e, 'angles'));
       if (Number(key(e, 'pitch'))) ang[0] = Number(key(e, 'pitch'));
-      scene.sun = { color: raw.slice(0, 3), brightness: raw[3] ?? 200, ambient: amb.length >= 3 ? amb.slice(0, 3) : null, angles: ang };
+      scene.sun = { color: raw.slice(0, 3), brightness: raw[3] ?? 200, ambient: amb.length >= 3 ? amb.slice(0, 3) : null, ambientBrightness: amb[3] ?? 200, angles: ang };
     }
     if (cls === 'infodecal' && key(e, 'texture')) scene.decals.push({ material: normMat(key(e, 'texture')), origin });
     if (cls === 'info_overlay' && key(e, 'material')) {
@@ -261,7 +261,7 @@ export function buildSceneFromVmf(text, vfs, opts = {}) {
   }
   for (const d of disps) {
     d.nrm = d.pos.map(p => unit(acc.get(key3(p)) ?? [0, 0, 1]));
-    emitDisplacement(d, addPoly);
+    emitDisplacement(d, addPoly, scene.dispGrids);
   }
   scene.dispCount = disps.length;
   return scene;
@@ -324,5 +324,6 @@ function buildVmfDisp(poly, node, uvOf) {
       }
     }
   }
-  return { pos, uv, alpha, tris };
+  // Bit 2 is Hammer's "no physics collision".
+  return { pos, uv, alpha, tris, noPhysics: (Number(key(node, 'flags')) & 2) !== 0 };
 }
