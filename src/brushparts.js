@@ -134,7 +134,7 @@ function bestLayout(faces, frames, pts) {
 // right up to 44 degrees). So a slanted brush's union can show its own faces, one per side, and
 // each one saves a plate. A face that doesn't fit gets a plate, which just covers whatever the
 // union painted there. The margin keeps a face off the tie between two sides.
-const SIDE_MARGIN = 0.15, FIT_TILES = 0.01;
+const SIDE_MARGIN = 0.15, FIT_TILES = 0.01, SIDE_FILL_STUDS = 0.02;
 
 const offBy = d => { const t = Math.abs(d) % 1; return Math.min(t, 1 - t); };
 
@@ -144,6 +144,30 @@ function fitsFace(m, f) {
     const a = dot(sub(p, m.corner), m.R), b = dot(sub(p, m.corner), m.D);
     const [u, v] = XFORMS[m.xf]((a + m.ou) / m.su, (b + m.ov) / m.sv);
     return offBy(u - dot(p, f.gu) - f.ou) < FIT_TILES && offBy(v - dot(p, f.gv) - f.ov) < FIT_TILES;
+  });
+}
+
+/**
+ * Which box sides are filled edge to edge by the faces leaning on them. Roblox stretches a union's
+ * surfaces on one side to fill that side, so a narrow face alone on a wide side shows its Texture
+ * squeezed (measured in Studio: 8.7 studs on a 100 stud side repeated 11.5 times). Those need plates.
+ */
+function filledSides(faces, frame, shape) {
+  return FACES.map((side, i) => {
+    const R = worldOf(frame, side.r), D = worldOf(frame, side.d);
+    const lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+    for (const f of faces) {
+      const lean = FACES.map(s => dot(f.n, worldOf(frame, s.n)));
+      const top = Math.max(...lean);
+      if (lean[i] !== top || top - Math.max(...lean.filter((_, k) => k !== i)) < SIDE_MARGIN) continue;
+      for (const p of f.pts) {
+        const a = dot(p, R), b = dot(p, D);
+        lo[0] = Math.min(lo[0], a); hi[0] = Math.max(hi[0], a);
+        lo[1] = Math.min(lo[1], b); hi[1] = Math.max(hi[1], b);
+      }
+    }
+    const wide = Math.abs(dot(shape.size, side.r)), tall = Math.abs(dot(shape.size, side.d));
+    return hi[0] - lo[0] >= wide - SIDE_FILL_STUDS && hi[1] - lo[1] >= tall - SIDE_FILL_STUDS;
   });
 }
 
@@ -166,12 +190,13 @@ function bodyLayout(faces, pts) {
   for (const set of axes) {
     for (const frame of framesFrom(set)) {
       const shape = fit(frame, pts);
+      const filled = filledSides(faces, frame, shape);
       const mapped = new Map();
       for (const f of drawn) {
         const lean = FACES.map(s => dot(f.n, worldOf(frame, s.n))).sort((x, y) => y - x);
         if (lean[0] - lean[1] < SIDE_MARGIN) continue;
         const m = mapFace(f, frame, shape);
-        if (!m || m.kind === 'skew' || !fitsFace(m, f)) continue;
+        if (!m || m.kind === 'skew' || !filled[m.face] || !fitsFace(m, f)) continue;
         const held = mapped.get(m.face);
         if (!held || f.area > held.area) mapped.set(m.face, { ...m, area: f.area, mat: f.mat, src: f });
       }
