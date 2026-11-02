@@ -51,7 +51,8 @@ function parseVvd(buf) {
 
 const DOOR_HARDWARE_GROUP = 1;
 const STATIC_PROP = 0x10;
-const ANIM_ALLZEROS = 0x20;
+const ANIM_ALLZEROS = 0x20, ANIM_FRAMEANIM = 0x40;
+const FRAME_CONST_POS = 0x01, FRAME_CONST_ROT = 0x02, FRAME_ANIM_POS = 0x04, FRAME_ANIM_ROT = 0x08;
 const BONE_SIZE = 216, SEQ_SIZE = 212, ANIMDESC_SIZE = 100;
 const RAWPOS = 0x01, RAWROT = 0x02, ANIMPOS = 0x04, ANIMROT = 0x08, DELTA = 0x10, RAWROT2 = 0x20;
 
@@ -115,6 +116,30 @@ const channelStart = (b, valuePtr, i) => {
   return off ? b.readInt16LE(valuePtr + off + 2) : 0;
 };
 
+const vec48 = (b, o) => [half(b.readUInt16LE(o)), half(b.readUInt16LE(o + 2)), half(b.readUInt16LE(o + 4))];
+
+/**
+ * L4D-era frame animation. A 24-byte header gives the offsets of the constants and the frame
+ * data, then one flag byte per bone. Constants hold a Quaternion48 and then a Vector48, in
+ * that order, for each bone flagged with them, and frames repeat the same for animated bones.
+ */
+function frameAnimPose(b, at, bones) {
+  const pose = new Map();
+  let constant = at + b.readInt32LE(at);
+  let frame = at + b.readInt32LE(at + 4);
+  bones.forEach((info, bone) => {
+    const flags = b[at + 24 + bone];
+    if (!flags) return;
+    let q = info.quat, p = info.pos;
+    if (flags & FRAME_CONST_ROT) { q = quat48(b, constant); constant += 6; }
+    if (flags & FRAME_CONST_POS) { p = vec48(b, constant); constant += 6; }
+    if (flags & FRAME_ANIM_ROT) { q = quat48(b, frame); frame += 6; }
+    if (flags & FRAME_ANIM_POS) { p = vec48(b, frame); frame += 6; }
+    pose.set(bone, { q, p });
+  });
+  return pose;
+}
+
 /** Local pose overrides for frame 0 of sequence 0, keyed by bone. Empty when it's the rest pose. */
 function firstFrame(b, bones) {
   const pose = new Map();
@@ -132,6 +157,7 @@ function firstFrame(b, bones) {
   }
   if (animblock !== 0) return pose; // lives in a separate .ani file; the rest pose is the closest we have
   let at = desc + animOfs;
+  if (b.readInt32LE(desc + 12) & ANIM_FRAMEANIM) return frameAnimPose(b, at, bones);
   for (let guard = 0; guard < 512; guard++) {
     const bone = b[at], flags = b[at + 1], next = b.readInt16LE(at + 2);
     const info = bones[bone];
